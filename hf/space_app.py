@@ -1,10 +1,13 @@
 """AegisX-Mini Gradio chat app for Hugging Face Spaces.
 
-Loads model.pt + tokenizer.json from a Hub repo and serves a chat UI.
+Two supported layouts:
+  1. Model files INSIDE the Space (model.pt + tokenizer.json at repo root)
+     -> no env vars needed, simplest possible setup.
+  2. Model on the Hub: set AEGISX_REPO env var to your model repo id.
 
-Environment variables:
-    AEGISX_REPO   (required) e.g. youruser/aegisx-mini
-    AEGISX_PROMPT (optional) system prompt prefix
+Environment variables (optional):
+    AEGISX_REPO   e.g. youruser/aegisx-mini  (only needed for layout 2)
+    AEGISX_PROMPT system prompt prefix
 """
 
 from __future__ import annotations
@@ -13,21 +16,31 @@ import os
 from pathlib import Path
 
 import gradio as gr
-import torch
-from huggingface_hub import snapshot_download
 
 from aegisx.chat import generate
 
-REPO = os.environ.get("AEGISX_REPO", "")
-if not REPO:
-    raise SystemExit("Set AEGISX_REPO env var, e.g. youruser/aegisx-mini")
-
 CACHE = Path("/tmp/aegisx-model")
 CACHE.mkdir(parents=True, exist_ok=True)
-local = snapshot_download(repo_id=REPO, local_dir=str(CACHE))
 
-MODEL_PATH = str(CACHE / "model.pt")
-TOKENIZER_PATH = str(CACHE / "tokenizer.json")
+# Layout 1: model files shipped inside the Space repo root.
+LOCAL_MODEL = Path(__file__).resolve().parent / "model.pt"
+LOCAL_TOKENIZER = Path(__file__).resolve().parent / "tokenizer.json"
+
+REPO = os.environ.get("AEGISX_REPO", "")
+if LOCAL_MODEL.exists() and LOCAL_TOKENIZER.exists():
+    MODEL_PATH = str(LOCAL_MODEL)
+    TOKENIZER_PATH = str(LOCAL_TOKENIZER)
+    print("Using model files shipped inside the Space.")
+else:
+    # Layout 2: fetch from a model repo on the Hub.
+    from huggingface_hub import snapshot_download
+
+    if not REPO:
+        raise SystemExit("No local model.pt found and AEGISX_REPO env var is not set.")
+    snapshot_download(repo_id=REPO, local_dir=str(CACHE))
+    MODEL_PATH = str(CACHE / "model.pt")
+    TOKENIZER_PATH = str(CACHE / "tokenizer.json")
+    print(f"Downloaded model from {REPO}")
 
 DEFAULT_SYSTEM = (
     "You are AegisX, a cybersecurity AI assistant. "
