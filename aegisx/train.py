@@ -130,6 +130,9 @@ def main() -> None:
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=200)
     parser.add_argument("--eval-iters", type=int, default=20)
+    parser.add_argument("--print-every", type=int, default=10, help="log every N steps")
+    parser.add_argument("--early-stop-patience", type=int, default=5, help="stop after N evals without val improvement (0 = disable)")
+    parser.add_argument("--early-stop-min-delta", type=float, default=1e-4, help="min val-loss improvement to count as progress")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="")
     args = parser.parse_args()
@@ -170,6 +173,9 @@ def main() -> None:
     print("[3/4] Encoding dataset")
     train_data, val_data = build_dataset(texts, tokenizer, cfg.block_size, seed=args.seed)
     print(f"      train tokens: {len(train_data):,} | val tokens: {len(val_data):,}")
+    if len(train_data) < 100_000:
+        print("      ⚠️ small corpus (<100k tokens): model will memorize, not generalize.")
+        print("        add more .txt files to data/raw for a smarter model.")
 
     model = GPT(cfg).to(device)
     print(f"      device: {device}")
@@ -188,6 +194,10 @@ def main() -> None:
     model.train()
     step = 0
     start = time.time()
+    best_val = float("inf")
+    best_state = None
+    stale_evals = 0
+    stopped_early = False
     while step < args.max_steps:
         optimizer.zero_grad()
         loss_accum = 0.0
@@ -202,7 +212,7 @@ def main() -> None:
         optimizer.step()
         step += 1
 
-        if step % 10 == 0 or step == args.max_steps:
+        if step % args.print_every == 0 or step == args.max_steps:
             elapsed = time.time() - start
             tokens_seen = step * args.batch_size * grad_accum * cfg.block_size
             print(
@@ -214,9 +224,28 @@ def main() -> None:
             metrics = estimate_loss(model, train_data, val_data, cfg.block_size, args.batch_size, device, eval_iters=args.eval_iters)
             print(f"  eval | train loss {metrics['train']:.4f} | val loss {metrics['val']:.4f}")
 
+            # Early stopping: keep the best weights, stop when val plateaus.
+            if args.early_stop_patience > 0:
+                if metrics["val"] < best_val - args.early_stop_min_delta:
+                    best_val = metrics["val"]
+                    best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+                    stale_evals = 0
+                else:
+                    stale_evals += 1
+                    if stale_evals >= args.early_stop_patience:
+                        print(f"  🛑 early stop at step {step}: val loss not improving for {args.early_stop_patience} evals")
+                        stopped_early = True
+                        break
+
     model_path = out_dir / "model.pt"
+    if best_state is not None:
+        model.load_state_dict(best_state)  # restore best weights, not the overfit final ones
+        print(f"      restoring best checkpoint (val loss {best_val:.4f})")
     model.save(str(model_path))
-    print(f"Done. Model saved to {model_path}")
+    if stopped_early:
+        print(f"Done (early-stopped). Model saved to {model_path}")
+    else:
+        print(f"Done. Model saved to {model_path}")
     print(f"Next: python -m aegisx.chat --model {model_path} --tokenizer {out_dir}/tokenizer.json")
 
 
