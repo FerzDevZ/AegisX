@@ -118,10 +118,36 @@ with gr.Blocks(title="AegisX-Mini") as demo:
         max_tokens = gr.Slider(50, 500, value=200, step=50, label="Max new tokens")
     clear = gr.Button("Clear")
 
+    def _to_tuples(history):
+        """Normalize Chatbot history to [(role, text)] tuples."""
+        out = []
+        for item in history or []:
+            if isinstance(item, dict):
+                role = item.get("role", "user")
+                content = item.get("content")
+                if isinstance(content, list):
+                    text = " ".join(
+                        c.get("text", "") for c in content
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                else:
+                    text = str(content or "")
+                out.append((role, text))
+            else:
+                out.append((item[0], item[1]))
+        return out
+
+    def _to_messages(history):
+        """Convert [(role, text)] tuples to new Gradio message dicts."""
+        return [
+            {"role": role, "content": [{"text": text, "type": "text"}]}
+            for role, text in history
+        ]
+
     def chat_fn(message, history, temperature, max_tokens):
         reply = respond(message, history, temperature, max_tokens)
-        history = history + [(message, reply)]
-        return "", history
+        conv = _to_tuples(history) + [("user", message), ("assistant", reply)]
+        return "", _to_messages(conv)
 
     msg.submit(chat_fn, [msg, chatbot, temperature, max_tokens], [msg, chatbot])
     clear.click(lambda: [], None, chatbot)
