@@ -13,11 +13,15 @@
 | Area | State |
 |---|---|
 | Pipeline | ✅ Train → chat → export works end-to-end (verified on CPU + Colab) |
-| Tests | ✅ 41/41 passing (tokenizer, model, training, gate) |
-| Corpus | 11 files, ~15k tokens bundled; `fetch_corpus.py` can pull OWASP/ASVS/ATT&CK |
-| Early stopping | ✅ added (stops at val-loss plateau, restores best weights) |
-| Notebook | ✅ no auto-push; manual export ZIP for HF upload |
-| Known gap | Corpus still tiny vs. what a useful model needs (target: 5–50 MB) |
+| Tests | ✅ 59/59 passing (tokenizer, model, training, gate, RAG, agent CLI) |
+| Corpus | ✅ **2.2 MB / 49 files / ~2.6k chunks** — OWASP (30 sheets + ASVS), MITRE ATT&CK, CVE records, custom EN+ID |
+| Early stopping | ✅ stops at val-loss plateau, restores best weights |
+| Periodic checkpoint | ✅ `model_latest.pt` every eval (crash-safe long Colab runs) |
+| RAG | ✅ zero-dep `aegisx/rag.py`: chunk + retrieve with source (2,589 chunks) |
+| Agent CLI | ✅ `aegisx/agent_cli.py`: model output → gated tool call |
+| Notebook (train) | ✅ no auto-push; manual export ZIP for HF upload |
+| Notebook (finetune) | ✅ `notebooks/aegisx_finetune_colab.ipynb` — QLoRA Qwen2.5-3B → merged model |
+| Known gap | Corpus should grow to 5–50 MB over time; add writeups & Q&A rows |
 
 ---
 
@@ -112,11 +116,14 @@
 
 | Phase | Work | Exit criteria |
 |---|---|---|
-| **P1 (now)** | D1 corpus fetch; M1 bigger config; run full Colab training on real data | val loss plateaus, chat output readable |
-| **P2** | D2–D4 more corpus; Q1–Q3 tests; manual HF upload v0.1 | model live on HF |
-| **P3** | R1–R4 RAG knowledge layer | grounded answers with source |
-| **P4** | A3 agent↔model wiring; bigger corpus; QoL | agent demo on authorized lab target |
-| **P5** | Re-evaluate: fine-tune path (QLoRA on Colab) for real power | decision: stay from-scratch or hybrid |
+| **P1 (done)** | D1 corpus fetch ✅; run full Colab training on real data | val loss plateaus, chat output readable |
+| **P2 (done)** | D2–D4 corpus expansion ✅ (CVE + OWASP + ATT&CK); Q1–Q3 tests ✅ | model live on HF (manual upload when ready) |
+| **P3 (done)** | R1–R4 RAG knowledge layer ✅ (zero-dep keyword index) | grounded answers with source ✅ |
+| **P4 (done)** | A3 agent↔model wiring ✅ (`agent_cli.py`, gated) | agent demo on authorized lab target |
+| **P5 (scaffolded)** | QLoRA fine-tune notebook ✅ (run on Colab when ready) | decision: stay from-scratch or hybrid |
+
+**Next up:** run the full Colab training on the new 2.2 MB corpus (bigger config
+M1: `n_embd 512 / n_layer 8`), then decide from-scratch vs QLoRA with real numbers.
 
 **Golden rule:** data → model → measure → repeat. Every iteration ends with a
 val-loss number and a chat sample, so we can see improvement, not guess it.

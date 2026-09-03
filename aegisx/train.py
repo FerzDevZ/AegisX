@@ -155,9 +155,11 @@ def main() -> None:
     else:
         tokenizer = ByteLevelBPETokenizer(vocab_size=args.vocab_size)
         tokenizer.train(texts, progress=True)
-        tok_path = out_dir / "tokenizer.json"
-        tokenizer.save(tok_path)
-        print(f"      trained vocab={tokenizer.vocab}, saved to {tok_path}")
+        print(f"      trained vocab={tokenizer.vocab}")
+    # Always persist the tokenizer beside the checkpoint for a standalone dir.
+    tok_path = out_dir / "tokenizer.json"
+    tokenizer.save(tok_path)
+    print(f"      tokenizer saved to {tok_path}")
 
     cfg = ModelConfig(
         vocab_size=tokenizer.vocab,
@@ -198,6 +200,8 @@ def main() -> None:
     best_state = None
     stale_evals = 0
     stopped_early = False
+    # Periodic checkpoint path: survives Colab disconnects mid-run.
+    latest_path = out_dir / "model_latest.pt"
     while step < args.max_steps:
         optimizer.zero_grad()
         loss_accum = 0.0
@@ -224,6 +228,9 @@ def main() -> None:
             metrics = estimate_loss(model, train_data, val_data, cfg.block_size, args.batch_size, device, eval_iters=args.eval_iters)
             print(f"  eval | train loss {metrics['train']:.4f} | val loss {metrics['val']:.4f}")
 
+            # Crash-safe periodic checkpoint (overwrites each eval).
+            model.save(str(latest_path))
+
             # Early stopping: keep the best weights, stop when val plateaus.
             if args.early_stop_patience > 0:
                 if metrics["val"] < best_val - args.early_stop_min_delta:
@@ -242,6 +249,8 @@ def main() -> None:
         model.load_state_dict(best_state)  # restore best weights, not the overfit final ones
         print(f"      restoring best checkpoint (val loss {best_val:.4f})")
     model.save(str(model_path))
+    if latest_path.exists() and latest_path != model_path:
+        latest_path.unlink()  # clean up periodic checkpoint; best is in model.pt
     if stopped_early:
         print(f"Done (early-stopped). Model saved to {model_path}")
     else:

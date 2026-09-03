@@ -10,6 +10,7 @@ A personal cybersecurity AI model — **trained from scratch**, light enough for
 | **Training** | Pure PyTorch, CPU-friendly, on your laptop **or** free Colab T4 |
 | **Hosting** | Hugging Face Hub + Space (Gradio chat) |
 | **Agent layer** | Recon/scan tools behind an authorization gate + audit log |
+| **RAG** | Zero-dependency retrieval to ground answers with sources |
 
 > Full design in [RFC.md](RFC.md). Status: **v0.1 — MVP training pipeline working.**
 
@@ -61,9 +62,39 @@ tests/            # pytest suite (tokenizer, model, training, gate)
 pytest -q
 ```
 
-Expected: all green. The suite covers the tokenizer round-trip, model
-forward/training/generation, dataset splitting, and the authorization gate
-(allowlist, audit log, sudo/shell injection blocking).
+Expected: all green (59 tests). The suite covers the tokenizer round-trip,
+model forward/training/generation, dataset splitting, early-stop end-to-end
+runs, tokenizer resume, chat one-shot, the authorization gate (allowlist,
+audit log, sudo/shell injection blocking), RAG retrieval, and agent-CLI tool
+calls.
+
+## Grow the corpus
+
+```bash
+# Pull public cysec corpora (OWASP sheets, ASVS, MITRE ATT&CK, CVE records)
+python3 scripts/fetch_corpus.py --target-dir data/raw
+```
+
+Then retrain: `python3 -m aegisx.train --data data/raw --out checkpoints/aegisx-mini`
+
+## Ground answers (RAG)
+
+```python
+from aegisx.rag import CorpusIndex
+
+idx = CorpusIndex()
+idx.add_dir('data/raw')
+for chunk in idx.retrieve('sql injection prevention', top_k=3):
+    print(f'[{chunk.source}] {chunk.text[:200]}')
+```
+
+## Agent mode (gated tool calls)
+
+```bash
+python -m aegisx.agent_cli --model checkpoints/aegisx-mini/model.pt \
+    --tokenizer checkpoints/aegisx-mini/tokenizer.json
+# then type: @tool recon_ports example.com  (gated by targets/authorized.txt)
+```
 
 ---
 

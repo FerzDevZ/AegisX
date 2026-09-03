@@ -103,6 +103,115 @@ def test_get_batch_normal_path():
     assert torch.equal(y, x + 1)
 
 
+def _write_small_corpus(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "a.txt").write_text("\n\n".join(SAMPLE), encoding="utf-8")
+    return tmp_path
+
+
+def test_end_to_end_tiny_train_saves_model(tmp_path):
+    """Q1: tiny corpus + early stopping completes and writes model.pt."""
+    import subprocess
+    import sys
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "30", "--eval-every", "5", "--eval-iters", "2",
+            "--early-stop-patience", "2", "--warmup-steps", "5",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "model.pt").exists()
+    assert (out / "tokenizer.json").exists()
+    assert (out / "config.json").exists()
+
+
+def test_train_resume_with_existing_tokenizer(tmp_path):
+    """Q2: --tokenizer resume path reuses a saved tokenizer."""
+    import subprocess
+    import sys
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out1 = tmp_path / "out1"
+    subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out1),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "5", "--eval-every", "10", "--eval-iters", "2",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    out2 = tmp_path / "out2"
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out2),
+            "--tokenizer", str(out1 / "tokenizer.json"),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "5", "--eval-every", "10", "--eval-iters", "2",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    # Resume run must NOT retrain a new tokenizer from scratch - reuse the file.
+    import json
+    tok1 = json.loads((out1 / "tokenizer.json").read_text())
+    tok2 = json.loads((out2 / "tokenizer.json").read_text())
+    assert tok1 == tok2
+
+
+def test_chat_one_shot_returns_text(tmp_path):
+    """Q3: chat generate() one-shot mode returns a non-empty string."""
+    import subprocess
+    import sys
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out = tmp_path / "out"
+    subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "5", "--eval-every", "10", "--eval-iters", "2",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.chat",
+            "--model", str(out / "model.pt"),
+            "--tokenizer", str(out / "tokenizer.json"),
+            "--prompt", "hello", "--max-new-tokens", "10",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip()
+
+
 def test_build_dataset_seeded():
     tokenizer = ByteLevelBPETokenizer(vocab_size=512)
     tokenizer.train(SAMPLE)
