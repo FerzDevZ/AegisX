@@ -1,0 +1,8 @@
+# AegisX-Mini core: CPU training + inference
+torch>=2.1
+
+# Development / verification
+pytest>=8.0
+
+# Optional: external recon tools (not installed by pip)
+# nmap, subfinder, nuclei, ffuf, semgrep — install via your OS package manager

@@ -1,0 +1,13 @@
+# AegisX authorization allowlist.
+# Add ONLY hosts you own or have written permission to test.
+# Supports: hostnames, *.wildcard.lab domains, IPs, and CIDR ranges.
+# Bug bounty rule: only in-scope assets from the program's policy.
+
+# --- your own lab ---
+localhost
+127.0.0.1
+192.168.1.0/24
+
+# --- example (replace with real scoped targets) ---
+# example.com
+# *.example.com

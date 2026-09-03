@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Training artifacts
+checkpoints/
+data/raw/*.bin
+reports/
+logs/
+
+# Notebooks / caches
+.ipynb_checkpoints/
+.cache/
+
+# Environment
+.env
+.env.local
