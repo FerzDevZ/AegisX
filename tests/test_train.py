@@ -77,6 +77,32 @@ def test_build_dataset_contains_eos():
     assert eos in train.tolist()
 
 
+def test_get_batch_tiny_dataset_does_not_crash():
+    """Regression: val set smaller than block_size used to crash randint."""
+    import torch
+
+    from aegisx.train import get_batch
+
+    # 223 tokens < block_size 256 — the exact Colab failure.
+    data = torch.arange(223, dtype=torch.long)
+    x, y = get_batch(data, block_size=256, batch_size=4, device="cpu")
+    assert x.shape == (1, 222)
+    assert y.shape == (1, 222)
+    assert torch.equal(y[0], x[0] + 1)
+
+
+def test_get_batch_normal_path():
+    import torch
+
+    from aegisx.train import get_batch
+
+    data = torch.arange(1000, dtype=torch.long)
+    x, y = get_batch(data, block_size=64, batch_size=8, device="cpu")
+    assert x.shape == (8, 64)
+    assert y.shape == (8, 64)
+    assert torch.equal(y, x + 1)
+
+
 def test_build_dataset_seeded():
     tokenizer = ByteLevelBPETokenizer(vocab_size=512)
     tokenizer.train(SAMPLE)

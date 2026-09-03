@@ -70,7 +70,19 @@ def build_dataset(
 def get_batch(
     data: torch.Tensor, block_size: int, batch_size: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Sample random windows (block_size+1) from the token stream."""
+    """Sample random windows (block_size+1) from the token stream.
+
+    Falls back to the single available window when the stream is shorter than
+    one full window (tiny datasets or small validation splits), so training
+    never crashes on `randint(from >= to)`.
+    """
+    if len(data) <= block_size + 1:
+        if len(data) < 2:
+            raise ValueError("Dataset too small: need at least 2 tokens to train.")
+        # Single aligned window: x predicts the next token y, same length.
+        x = data[:-1].unsqueeze(0)
+        y = data[1:].unsqueeze(0)
+        return x.to(device), y.to(device)
     ix = torch.randint(len(data) - block_size - 1, (batch_size,))
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
