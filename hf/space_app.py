@@ -1,13 +1,12 @@
-"""AegisX-Mini Gradio chat app for Hugging Face Spaces.
+"""AegisX-Mini Gradio chat app for Hugging Face Spaces (ZeroGPU-compatible).
 
-Two supported layouts:
+Supported layouts:
   1. Model files INSIDE the Space (model.pt + tokenizer.json at repo root)
      -> no env vars needed, simplest possible setup.
   2. Model on the Hub: set AEGISX_REPO env var to your model repo id.
 
-Environment variables (optional):
-    AEGISX_REPO   e.g. youruser/aegisx-mini  (only needed for layout 2)
-    AEGISX_PROMPT system prompt prefix
+The app is decorated with @spaces.GPU so it runs on the free ZeroGPU tier.
+Model inference falls back to CPU when no GPU is allocated.
 """
 
 from __future__ import annotations
@@ -16,6 +15,11 @@ import os
 from pathlib import Path
 
 import gradio as gr
+
+try:
+    import spaces
+except ImportError:  # pragma: no cover - local runs without the spaces lib
+    spaces = None
 
 from aegisx.chat import generate
 
@@ -49,19 +53,60 @@ DEFAULT_SYSTEM = (
 )
 SYSTEM_PROMPT = os.environ.get("AEGISX_PROMPT", DEFAULT_SYSTEM)
 
+# Warm the model once at startup; ZeroGPU reuses it across requests.
+_model = None
+
+
+def _load_model():
+    global _model
+    if _model is None:
+        from aegisx.model import GPT
+        from aegisx.tokenizer import ByteLevelBPETokenizer
+
+        model = GPT.load(MODEL_PATH, device="cpu")
+        model.eval()
+        tokenizer = ByteLevelBPETokenizer.load(TOKENIZER_PATH)
+        _model = (model, tokenizer)
+        print("Model loaded.")
+    return _model
+
+
+def _generate_text(prompt: str, temperature: float, max_tokens: int) -> str:
+    import torch
+
+    model, tokenizer = _load_model()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        model = model.to(device)  # ZeroGPU: move weights to the allocated GPU
+    ids = tokenizer.encode(prompt, add_special_tokens=True)
+    idx = torch.tensor([ids], dtype=torch.long, device=device)
+    with torch.no_grad():
+        out = model.generate(
+            idx,
+            max_new_tokens=int(max_tokens),
+            temperature=float(temperature),
+            top_k=50,
+            repetition_penalty=1.1,
+        )
+    return tokenizer.decode(out[0].tolist()[len(ids):]).strip()
+
 
 def respond(message: str, history: list, temperature: float, max_tokens: int) -> str:
     prompt = SYSTEM_PROMPT + "User: " + message + "\n\nAegisX: "
-    return generate(
-        MODEL_PATH,
-        TOKENIZER_PATH,
-        prompt,
-        max_new_tokens=int(max_tokens),
-        temperature=float(temperature),
-        top_k=50,
-        repetition_penalty=1.1,
-        device="cpu",
-    )
+    if spaces is not None:
+        return _respond_gpu(prompt, temperature, max_tokens)
+    return _generate_text(prompt, temperature, max_tokens)
+
+
+if spaces is not None:
+    # ZeroGPU: this function runs with a GPU allocated on demand.
+    @spaces.GPU
+    def _respond_gpu(prompt: str, temperature: float, max_tokens: int) -> str:
+        return _generate_text(prompt, temperature, max_tokens)
+else:
+
+    def _respond_gpu(prompt: str, temperature: float, max_tokens: int) -> str:
+        return _generate_text(prompt, temperature, max_tokens)
 
 
 with gr.Blocks(title="AegisX-Mini") as demo:
