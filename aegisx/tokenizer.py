@@ -56,6 +56,7 @@ class ByteLevelBPETokenizer:
             )
 
         budget = self.vocab_size - self.base_offset - len(self.special_tokens)
+        import heapq
 
         # Pre-tokenize everything once into token-id lists (bytes).
         pieces: list[list[int]] = []
@@ -63,40 +64,74 @@ class ByteLevelBPETokenizer:
             for token in self._pretokenize(text):
                 pieces.append([b for b in token.encode("utf-8")])
 
-        merge_count = 0
-        while merge_count < budget:
-            pairs: Counter[tuple[int, int]] = Counter()
-            for piece in pieces:
-                if len(piece) < 2:
-                    continue
-                for i in range(len(piece) - 1):
-                    pairs[(piece[i], piece[i + 1])] += 1
-            if not pairs:
-                break
+        # pair -> count across the whole corpus, plus which pieces contain it.
+        pair_counts: Counter[tuple[int, int]] = Counter()
+        pair_pieces: dict[tuple[int, int], set[int]] = {}
+        for pi, piece in enumerate(pieces):
+            for i in range(len(piece) - 1):
+                pair = (piece[i], piece[i + 1])
+                pair_counts[pair] += 1
+                pair_pieces.setdefault(pair, set()).add(pi)
 
-            (left, right), _count = pairs.most_common(1)[0]
+        # Max-heap of (-count, pair); lazy deletion via stale-count check.
+        heap = [(-count, pair) for pair, count in pair_counts.items()]
+        heapq.heapify(heap)
+
+        def piece_pairs(piece: list[int]) -> Counter[tuple[int, int]]:
+            c: Counter[tuple[int, int]] = Counter()
+            for i in range(len(piece) - 1):
+                c[(piece[i], piece[i + 1])] += 1
+            return c
+
+        def merge_piece(piece: list[int]) -> list[int]:
+            """Replace every (left, right) in piece with new_id."""
+            if len(piece) < 2:
+                return piece
+            out: list[int] = []
+            i = 0
+            while i < len(piece):
+                if i < len(piece) - 1 and piece[i] == left and piece[i + 1] == right:
+                    out.append(new_id)
+                    i += 2
+                else:
+                    out.append(piece[i])
+                    i += 1
+            return out
+
+        merge_count = 0
+        while merge_count < budget and heap:
+            neg_count, pair = heapq.heappop(heap)
+            if pair_counts.get(pair, 0) != -neg_count:
+                continue  # stale heap entry
+            left, right = pair
             new_id = self.base_offset + len(self.special_tokens) + merge_count
 
             self._merges.append((left, right))
             self._merge_rank[(left, right)] = new_id
 
-            # Rewrite all pieces replacing (left, right) with new_id.
-            new_pieces: list[list[int]] = []
-            for piece in pieces:
-                if len(piece) < 2:
-                    new_pieces.append(piece)
-                    continue
-                out: list[int] = []
-                i = 0
-                while i < len(piece):
-                    if i < len(piece) - 1 and piece[i] == left and piece[i + 1] == right:
-                        out.append(new_id)
-                        i += 2
-                    else:
-                        out.append(piece[i])
-                        i += 1
-                new_pieces.append(out)
-            pieces = new_pieces
+            # Rebuild only pieces that contain the pair, updating counts of
+            # the pairs they lose and gain. Untouched pieces need no recount.
+            touched = list(pair_pieces.get(pair, ()))
+            for pi in touched:
+                old_counts = piece_pairs(pieces[pi])
+                merged = merge_piece(pieces[pi])
+                new_counts = piece_pairs(merged)
+                if old_counts == new_counts:
+                    continue  # no occurrence actually present
+                for p, c in old_counts.items():
+                    pair_counts[p] -= c
+                    if pair_counts[p] == 0:
+                        pair_counts.pop(p)
+                    s = pair_pieces.get(p)
+                    if s is not None:
+                        s.discard(pi)
+                        if not s:
+                            pair_pieces.pop(p, None)
+                for p, c in new_counts.items():
+                    pair_counts[p] += c
+                    pair_pieces.setdefault(p, set()).add(pi)
+                    heapq.heappush(heap, (-pair_counts[p], p))
+                pieces[pi] = merged
             merge_count += 1
             if progress and merge_count % 500 == 0:
                 print(f"  merges: {merge_count}/{budget}")
