@@ -180,8 +180,13 @@ def flatten_json(raw: str) -> str:
     return "\n\n".join(lines)
 
 
-def fetch_tarball_md(tarball_url: str, dest: Path) -> bool:
-    """Download a GitHub codeload tarball and concat every .md into one .txt."""
+def fetch_tarball_md(tarball_url: str, dest: Path, heading: str = "") -> bool:
+    """Download a GitHub codeload tarball and concat every .md into one .txt.
+
+    Skips LICENSE / CONTRIBUTING / CODE_OF_CONDUCT files (boilerplate that
+    trains poorly). `heading` prepends a short attribution line for sources
+    under CC BY-NC / CC BY-SA (required by those licenses).
+    """
     import tarfile
     import io
 
@@ -197,7 +202,12 @@ def fetch_tarball_md(tarball_url: str, dest: Path) -> bool:
     except Exception as exc:
         print(f"    ✗ not a gzip tarball: {exc}")
         return False
-    docs = [m for m in tf.getmembers() if m.isfile() and m.name.lower().endswith(".md")]
+    skip = ("LICENSE", "CONTRIBUTING", "CODE_OF_CONDUCT")
+    docs = [
+        m for m in tf.getmembers()
+        if m.isfile() and m.name.lower().endswith(".md")
+        and not any(s in m.name.upper() for s in skip)
+    ]
     chunks = []
     for m in sorted(docs, key=lambda x: x.name):
         raw = tf.extractfile(m).read().decode("utf-8", errors="replace")
@@ -206,7 +216,10 @@ def fetch_tarball_md(tarball_url: str, dest: Path) -> bool:
     if not chunks:
         print("    ✗ no markdown found")
         return False
-    dest.write_text("\n\n".join(chunks), encoding="utf-8")
+    text = "\n\n".join(chunks)
+    if heading:
+        text = heading + "\n\n" + text
+    dest.write_text(text, encoding="utf-8")
     print(f"    ✓ {len(chunks)} docs -> {dest.name} ({dest.stat().st_size / 1024:.0f} KB)")
     return True
 
@@ -553,17 +566,23 @@ def main() -> None:
             if fetch(url, dest):
                 ok += 1
 
-    # Guide-sized markdown repos: WSTG + PayloadsAllTheThings.
+    # Guide-sized markdown repos. OWASP docs are CC BY-SA 4.0; HackTricks is
+    # CC BY-NC 4.0 (non-commercial use with attribution) - acceptable training
+    # data for this personal project. License heading keeps attribution.
     md_sources = [
-        ("owasp_wstg.txt", "https://codeload.github.com/OWASP/wstg/tar.gz/refs/heads/master"),
-        ("payloads_all_the_things.txt", "https://codeload.github.com/swisskyrepo/PayloadsAllTheThings/tar.gz/refs/heads/master"),
+        ("owasp_wstg.txt", "https://codeload.github.com/OWASP/wstg/tar.gz/refs/heads/master", ""),
+        ("payloads_all_the_things.txt", "https://codeload.github.com/swisskyrepo/PayloadsAllTheThings/tar.gz/refs/heads/master", ""),
+        ("owasp_mastg.txt", "https://codeload.github.com/OWASP/mastg/tar.gz/refs/heads/master", "Source: OWASP Mobile Application Security Testing Guide (CC BY-SA 4.0)."),
+        ("owasp_api_security.txt", "https://codeload.github.com/OWASP/API-Security/tar.gz/refs/heads/master", "Source: OWASP API Security Project (CC BY-SA 4.0)."),
+        ("owasp_top10.txt", "https://codeload.github.com/OWASP/Top10/tar.gz/refs/heads/master", "Source: OWASP Top 10 (CC BY-SA 4.0)."),
+        ("hacktricks.txt", "https://codeload.github.com/HackTricks-wiki/hacktricks/tar.gz/refs/heads/master", "Source: HackTricks by Carlos Polop (CC BY-NC 4.0, non-commercial with attribution)."),
     ]
-    for name, url in md_sources:
+    for name, url, heading in md_sources:
         dest = out_dir / name
         if dest.exists() and not args.force:
             print(f"  = {name} exists, skipping (--force to re-download)")
             continue
-        if fetch_tarball_md(url, dest):
+        if fetch_tarball_md(url, dest, heading):
             ok += 1
 
     total = sum(p.stat().st_size for p in out_dir.glob("*.txt"))

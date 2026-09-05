@@ -1,0 +1,29 @@
+User: Apa ancaman utama pada jaringan Wi-Fi?
+AegisX: Ancaman utama pada Wi-Fi: (1) akses tanpa otorisasi karena WEP/PSK lemah atau tidak ada enkripsi, (2) Evil Twin - AP palsu yang meniru SSID asli untuk menangkap kredensial, (3) deauthentication attack untuk memaksa klien berpindah ke AP palsu, (4) serangan terhadap WPA/WPA2 lewat handshake capture dan cracking, (5) KRACK yang mengeksploitasi protokol 4-way handshake, dan (6) informasi bocor dari jaringan terbuka seperti serangan pass-the-hash dan session hijack. Mitigasi dasar: WPA2/WPA3 dengan password kuat, isolasi klien, dan jangan pernah memakai jaringan publik tanpa VPN.
+
+User: Apa itu Evil Twin dan bagaimana cara bertahan?
+AegisX: Evil Twin adalah titik akses palsu dengan SSID yang sama dengan jaringan sah, sehingga perangkat otomatis mencoba terhubung. Penyerang lalu menangkap trafik, kredensial, dan bisa melakukan serangan man-in-the-middle. Cara bertahan: hindari auto-connect ke jaringan publik, verifikasi AP dengan informasi admin (bukan hanya nama SSID), dan pastikan koneksi memakai TLS/HTTPS atau VPN. Di sisi administrator, aktifkan 802.1X (WPA-Enterprise) sehingga setiap klien harus membuktikan identitasnya.
+
+User: Apa itu WPA-Enterprise dan kenapa lebih aman dari WPA-PSK?
+AegisX: WPA-Enterprise memakai 802.1X: setiap pengguna punya kredensial sendiri (biasanya lewat RADIUS server), bukan satu password bersama. Keuntungannya: password per pengguna, bisa dicabut per orang tanpa mengganti password semua orang, dan ada autentikasi mutual antara klien dan server sehingga Evil Twin bisa dideteksi. WPA-PSK memakai satu pre-shared key yang bila bocor memberi akses ke semua orang. Kelemahan WPA-Enterprise: bergantung pada validasi sertifikat server; tanpa validasi, penyerang bisa membuat fake RADIUS (hostapd-wpe).
+
+User: Apa itu WPA3 dan apa perbaikannya?
+AegisX: WPA3 adalah generasi terbaru keamanan Wi-Fi. Perbaikannya: (1) SAE (Simultaneous Authentication of Equals) menggantikan PSK sehingga password offline cracking tidak mungkin, (2) forward secrecy, (3) enkripsi manajemen frame untuk mencegah deauthentication attack, dan (4) proteksi lebih baik untuk jaringan terbuka (OWE). Transisi ke WPA3 di lingkungan campuran memakai mode transitional yang rawan downgrade attack, jadi pastikan semua perangkat mendukung WPA3 murni untuk keamanan maksimal.
+
+User: Apa itu WPS dan mengapa berbahaya?
+AegisX: WPS (Wi-Fi Protected Setup) dirancang untuk memudahkan koneksi dengan PIN 8 digit. Masalahnya: PIN diproses dalam dua bagian (4 digit, lalu 3 digit + checksum), sehingga hanya ada sekitar 11.000 kemungkinan untuk separuh pertama. Ini membuat WPS bisa dibobol dalam hitungan jam dengan serangan brute force (misalnya reaver). Banyak router versi lama punya WPS aktif secara default. Rekomendasi: matikan WPS sepenuhnya, karena WPA2 password yang kuat tidak berarti apa-apa jika WPS masih aktif.
+
+User: Apa itu aircrack-ng dan bagaimana alur serangannya?
+AegisX: aircrack-ng adalah suite untuk pengujian Wi-Fi: airodump-ng untuk menangkap trafik dan menemukan jaringan, aireplay-ng untuk injeksi paket dan deauthentication, aircrack-ng untuk cracking handshake, dan airmon-ng untuk mengaktifkan monitor mode. Alur dasar: aktifkan monitor mode pada adapter, tangkap beacon jaringan target dengan airodump-ng, deauth klien untuk memaksa handshake ulang, simpan handshake, lalu crack dengan aircrack-ng atau hashcat (wordlist/GPU). Semua ini hanya legal pada jaringan milik sendiri atau yang diizinkan tertulis.
+
+User: Apa itu deauthentication attack dan cara mencegahnya?
+AegisX: Deauthentication attack mengirim frame deauth palsu untuk memutus klien dari AP. Efeknya: klien putus lalu otomatis mencoba menyambung lagi, dan saat itulah handshake bisa ditangkap atau klien dipindahkan ke Evil Twin. Pencegahan: WPA3 yang mengenkripsi management frame (PMF), atau di WPA2 aktifkan PMF (Protected Management Frames) bila didukung perangkat. Dari sisi deteksi, pantau alarm deauth yang berlebihan di WIDS. Client-side: jangan auto-connect.
+
+User: Bagaimana cara mengamankan jaringan rumah?
+AegisX: Dasar-dasar: (1) ganti SSID dan password default, gunakan password panjang acak untuk WPA2/WPA3, (2) matikan WPS dan UPnP router, (3) matikan SSID broadcast hanya jika diperlukan, (4) aktifkan guest network terpisah untuk perangkat IoT yang tidak tepercaya, (5) perbarui firmware router secara rutin, (6) filter MAC boleh sebagai lapisan tambahan tapi jangan diandalkan karena bisa dipalsukan, dan (7) nonaktifkan remote management dari internet. IoT di jaringan tamu mencegah perangkat lemah membuka akses ke perangkat lain.
+
+User: Apa itu Rogue Access Point dan bagaimana mendeteksinya?
+AegisX: Rogue AP adalah titik akses tidak sah yang dipasang di jaringan, bisa oleh karyawan (membawa router sendiri) atau penyerang. Karena terhubung ke jaringan internal, ia bisa menawarkan koneksi "nyaman" tapi menangkap semua trafik. Deteksi: dengan WIDS/WIPS yang memantau sinyal tak dikenal, atau scan berkala (misalnya memakai alat seperti Kismet) untuk menemukan SSID/AP yang tidak terdaftar. Juga periksa fisik: AP asing yang terpasang di switch. Kebijakan organisasi harus melarang pemasangan AP tanpa persetujuan.
+
+User: Apa itu serangan man-in-the-middle pada Wi-Fi publik?
+AegisX: Pada Wi-Fi publik, penyerang berada di posisi yang sama dengan klien sehingga bisa: membuat AP Evil Twin, memalsukan DNS, menyuntikkan halaman login palsu untuk mencuri kredensial, dan membaca trafik tidak terenkripsi. Mitigasi pengguna: jangan pernah login ke akun penting di Wi-Fi publik tanpa VPN, pastikan HTTPS (periksa ikon gembok), dan nonaktifkan berbagi file. Untuk peneliti keamanan yang menguji Wi-Fi publik secara sah, selalu gunakan jaringan uji sendiri atau izin tertulis.

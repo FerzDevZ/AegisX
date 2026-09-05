@@ -66,10 +66,6 @@ private transient double margin; // declared transient
 
 Some of your application objects may be forced to implement `Serializable` due to their hierarchy. To guarantee that your application objects can't be deserialized, a `readObject()` method should be declared (with a `final` modifier) which always throws an exception:
 
-private final void readObject(ObjectInputStream in) throws java.io.IOException {
- throw new java.io.IOException("Cannot be deserialized");
-}
-
 The `java.io.ObjectInputStream` class is used to deserialize objects. It's possible to harden its behavior by subclassing it. This is the best solution if:
 
 - you can change the code that does the deserialization;
@@ -82,22 +78,6 @@ Because this call happens before a `readObject()` is called, you can be sure tha
 A simple example is shown here, where the `LookAheadObjectInputStream` class is guaranteed to **not** deserialize any other type besides the `Bicycle` class:
 
 public class LookAheadObjectInputStream extends ObjectInputStream {
-
-public LookAheadObjectInputStream(InputStream inputStream) throws IOException {
- super(inputStream);
- }
-
-/**
- * Only deserialize instances of our expected Bicycle class
- */
- @Override
- protected Class<?> resolveClass(ObjectStreamClass desc) throws IOException, ClassNotFoundException {
- if (!desc.getName().equals(Bicycle.class.getName())) {
- throw new InvalidClassException("Unauthorized deserialization attempt", desc.getName());
- }
- return super.resolveClass(desc);
- }
-}
 
 More complete implementations of this approach have been proposed by various community members:
 
@@ -175,9 +155,6 @@ The following libraries are either no longer maintained or cannot be used safely
 (see [this document](https://github.com/Contrast-Security-OSS/yamlbeans/blob/main/SECURITY.md))
 
 Search the source code for the following terms:
-
-1. `TypeNameHandling`
-2. `JavaScriptTypeResolver`
 
 Look for any serializers where the type is set by a user controlled variable.
 

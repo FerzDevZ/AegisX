@@ -13,8 +13,8 @@
 | Area | State |
 |---|---|
 | Pipeline | ✅ Train → chat → export works end-to-end (verified on CPU + Colab) |
-| Tests | ✅ 77/77 passing (tokenizer, model, training, gate, RAG, agent CLI, eval, clean) |
-| Corpus | ✅ **~26.8 MB / 204 files** — OWASP (ASVS + CheatSheetSeries penuh ~120 sheet), MITRE ATT&CK (enterprise + ICS + mobile), WSTG, PayloadsAllTheThings, CVE (NVD bulk ~38k), custom EN+ID, Wikipedia ID keamanan siber (**±187 artikel, korpus ID total ~1.2 MB**; fetch via Special:Export, resume-safe) |
+| Tests | ✅ **78/78 passing** (tokenizer, model, training, gate, RAG, agent CLI, eval, clean) |
+| Corpus | ✅ **~46 MB / 208 files** — OWASP (ASVS + CheatSheetSeries penuh ~120 sheet + MASTG + API-Security + Top10), MITRE ATT&CK (enterprise + ICS + mobile), WSTG, PayloadsAllTheThings, **HackTricks (CC BY-NC, atribusi ada)**, CVE (NVD bulk ~38k), custom EN+ID, Wikipedia ID keamanan siber (**±236 artikel, korpus ID total ~1.2 MB**; fetch via Special:Export, resume-safe) |
 | Early stopping | ✅ stops at val-loss plateau, restores best weights |
 | AMP (T4) | ✅ mixed precision on CUDA (`--no-amp` to disable), ~1.5-2x faster |
 | History CSV | ✅ `history.csv` logs every eval; `aegisx.eval --history` appends scores per run |
@@ -27,7 +27,7 @@
 | Notebook (SFT own) | ✅ `notebooks/aegisx_sft_own_colab.ipynb` — stage 2: SFT of YOUR OWN from-scratch model (`--init-from`, no third-party base) |
 | Notebook (finetune Qwen) | ✅ optional `aegisx_finetune_colab.ipynb` — QLoRA Qwen2.5-3B (only if user wants a non-pure-zero path) |
 | Space app | ✅ RAG grounding: answers cite `knowledge/` sources (`hf/space_app.py`) |
-| Known gap | Corpus should grow to 5–50 MB over time; add writeups & Q&A rows |
+| Known gap | Corpus ~46 MB ✓ (target 50 MB tercapai, sumber CC BY-SA/BY-NC dengan atribusi); terjemahan ID masih minoritas — perbanyak chat ID & Wikipedia ID di siklus berikutnya |
 
 ---
 
@@ -131,10 +131,11 @@
 | **P4 (done)** | A3 agent↔model wiring ✅ (`agent_cli.py`, gated) | agent demo on authorized lab target |
 | **P5 (done)** | **Pure-zero SFT** ✅ — stage-2 notebook (`--init-from` your own model + 925-row SFT text); QLoRA-Qwen kept only as optional non-zero alternative | model answers questions, still 100% own weights |
 
-**Next up:** run the full Colab training on the new 2.3 MB corpus with the bigger
-config (M1: `n_embd 512 / n_layer 8`), then run §5b eval and upload when the
-numbers look right. Expected T4 time: tokenizer ~1–2 min, then training until
-early stop (watch for `🛑`).
+**Next up:** run the full Colab training on the **~46 MB corpus** with the upgraded
+architecture (**vocab 8192 / block 768**, M1 config n_embd 512 / n_layer 8) — the
+notebook now **auto-archives** any old-arch checkpoint and trains fresh (no crash,
+no data loss). Then run §5b eval and upload when the numbers look right. Expected
+T4 time: tokenizer ~30–45 min (one-time), then training until early stop (`🛑`).
 
 **Golden rule:** data → model → measure → repeat. Every iteration ends with a
 val-loss number and a chat sample, so we can see improvement, not guess it.

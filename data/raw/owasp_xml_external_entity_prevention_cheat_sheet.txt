@@ -171,8 +171,6 @@ try {
 // Load XML file or stream using a XXE agnostic configured parser...
 DocumentBuilder safebuilder = dbf.newDocumentBuilder();
 
-DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-
 String[] featuresToDisable = {
  // Xerces 1 - http://xerces.apache.org/xerces-j/features.html#external-general-entities
  // Xerces 2 - http://xerces.apache.org/xerces2-j/features.html#external-general-entities

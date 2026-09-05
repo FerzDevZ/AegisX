@@ -534,45 +534,10 @@ Be mindful that the proxy must be able to collect full requests and not just URL
 - [REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html) - the other side of this cheat sheet
 - [RESTful services, web security blind spot](https://www.youtube.com/watch?v=pWq4qGLAZHI) - avideo presentation elaborating on most of the topics on this cheat sheet.
 
-This repository contains documentation and educational content.
-There are no executable components or deployed services associated with this project.
-
-The `master` branch reflects the latest maintained version of the documentation.
-
-| Version | Supported |
-|--------|-----------|
-| master | ✅ |
-| Others | ❌ |
-
-This repository does **not** directly process user data, authentication, or runtime execution.
-However, if you believe you have identified:
-
-- A security issue affecting linked tooling or referenced examples
-- A misconfiguration that could lead to unsafe usage patterns
-- A vulnerability related to CI/CD workflows or repository automation
-
-Please follow **responsible disclosure** practices.
-
-- Open a **private GitHub Security Advisory** for this repository, **or**
-- Contact the OWASP project maintainers through official OWASP communication channels
-
 - A clear description of the issue
 - Steps to reproduce (if applicable)
 - Potential impact
 - Suggested remediation (if available)
-
-- Reports will be reviewed by project maintainers
-- If applicable, fixes will be discussed and implemented
-- Public disclosure may occur after remediation, with reporter credit if desired
-
-## Security Best Practices for Contributors
-
-- Do not include secrets, tokens, or credentials in documentation or workflows
-- Avoid using user-controlled input in CI/CD pipelines without validation
-- Follow the OWASP Cheat Sheet Series for secure development and governance practices
-
-Security researchers and contributors who responsibly disclose issues may be acknowledged
-in release notes or project documentation, unless anonymity is requested.
 
 Web APIs have gained a lot of popularity as they allow third-party programs to interact with sites in a more efficient and easy way. In this guide, we will discuss some basic concepts about APIs and the way to test security for APIs.
 
@@ -1966,7 +1931,7 @@ For example, if testers find a Google Map API Key, they can check if this API Ke
 
 <script type="application/json">
 ...
-{"GOOGLE_MAP_API_KEY":"AIzaSyDUEBnKgwiqMNpDplT6ozE4Z0XxuAbqDi4", "RECAPTCHA_KEY":"6LcPscEUiAAAAHOwwM3fGvIx9rsPYUq62uRhGjJ0"}
+{"GOOGLE_MAP_API_KEY":"AIzaREDACTEDREDACTEDREDACTED", "RECAPTCHA_KEY":"6LcPscEUiAAAAHOwwM3fGvIx9rsPYUq62uRhGjJ0"}
 ...
 </script>
 
@@ -3060,10 +3025,6 @@ Content-Length: 36
 
 Some web frameworks provide a way to override the actual HTTP method in the request. They achieve this by emulating the missing HTTP verbs and passing some custom headers in the requests. The main purpose of this is to circumvent a middleware application (such as a proxy or web application firewall) which blocks specific methods. The following alternative HTTP headers could potentially be used:
 
-- `X-HTTP-Method`
-- `X-HTTP-Method-Override`
-- `X-Method-Override`
-
 To test this, consider scenarios where restricted verbs like `PUT` or `DELETE` return a `405 Method not allowed`. In such cases, replay the same request, but add the alternative headers for HTTP method overriding. Then, observe the system's response. The application should respond with a different status code (*e.g.* `200 OK`) in cases where method overriding is supported.
 
 The web server in the following example does not allow the `DELETE` method and blocks it:
@@ -3148,8 +3109,6 @@ Set the permissions of the files and directories properly so that unauthorized u
 - [Windows AccessEnum](https://technet.microsoft.com/en-us/sysinternals/accessenum)
 - [Windows AccessChk](https://technet.microsoft.com/en-us/sysinternals/accesschk)
 - [Linux namei](https://linux.die.net/man/1/namei)
-
-- [CWE-732: Incorrect Permission Assignment for Critical Resource](https://cwe.mitre.org/data/definitions/732.html)
 
 A successful exploitation of this kind of vulnerability allows an adversary to claim and take control of the victim's subdomain. This attack relies on the following:
 
@@ -7130,8 +7089,6 @@ Monitor all the responses from the web server and have a look at the HTML/JavaSc
 
 A similar query is generally used from the web application to authenticate a user. If the query returns a value it means that inside the database a user with that set of credentials exists, then the user is allowed to log-in to the system, otherwise access is denied. The values of the input fields are generally obtained from the user through a web form. Suppose we insert the following Username and Password values:
 
-`SELECT * FROM Users WHERE Username='1' OR '1' = '1' AND Password='1' OR '1' = '1'`
-
 If we suppose that the values of the parameters are sent to the server through the GET method, and if the domain of the vulnerable site is `www.example.com`, the request that we'll carry out will be:
 
 `https://www.example.com/index.php?username=1'%20or%20'1'%20=%20'1&amp;password=1'%20or%20'1'%20=%20'1`
@@ -8921,8 +8878,6 @@ Note the redefined value of `custom_entity` is written using numeric character r
 This loads the local DTD, overrides its `custom_entity` definition with the error-based exfiltration payload, and then invokes `%local_dtd;` so the parser processes the redefined entity - triggering the same file-content-in-error-message leak as above, but without a single byte of network traffic leaving the server. Tools such as the [dtd-finder](https://github.com/GoSecure/dtd-finder) project maintain lists of known DTD file paths (and can scan a filesystem or container image for DTDs actually present) to speed up this search.
 
 Sometimes the tester only controls a single value that is later embedded into a larger, server-generated XML document (for example, a form field that ends up inside a backend SOAP request). In that case the tester cannot control or inject a `<!DOCTYPE>` declaration, which rules out the classic entity-based attacks above. **XInclude** is a separate part of the XML specification that lets one XML document pull in content from another source, and it can be triggered from within an ordinary data value - no DOCTYPE required:
-
-productId=<foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></foo>&storeId=1
 
 If the backend embeds this value into its own XML document unescaped and its parser has XInclude processing enabled, the referenced file's contents are inlined at that point in the resulting document.
 
@@ -12468,9 +12423,6 @@ These two headers are used between the browser and the server to determine which
 
 This response header allows browsers to read the response when credentials are passed. When the header is sent, the web application must set an origin to the value of the `Access-Control-Allow-Origin` header. The `Access-Control-Allow-Credentials` header cannot be used along with the `Access-Control-Allow-Origin` header whose value is the `*` wildcard like the following:
 
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Credentials: true
-
 XHR L2 introduces the possibility of creating a cross-domain request using the XHR API for backwards compatibility. This can introduce security vulnerabilities that in XHR L1 were not present. Interesting points of the code to exploit would be URLs that are passed to XMLHttpRequest without validation, specially if absolute URLs are allowed because that could lead to code injection. Likewise, other part of the application that can be exploited is if the response data is not escaped and we can control it by providing user-supplied input.
 
 There are other headers involved like `Access-Control-Max-Age` that determines the time a preflight request can be cached in the browser, or `Access-Control-Expose-Headers` that indicates which headers are safe to expose to the API of a CORS API specification.
@@ -13969,7 +13921,7 @@ In this vulnerable example, every user (even unauthenticated) can gain access to
 Here is an example in which the tester uses an extracted token they do not own to perform an action as the veterinarian "Benoit":
 
 query brokenAccessControl {
- myInfo(accessToken:"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJwb2MiLCJzdWIiOiJKdWxpZW4iLCJpc3MiOiJBdXRoU3lzdGVtIiwiZXhwIjoxNjAzMjkxMDE2fQ.r3r0hRX_t7YLiZ2c2NronQ0eJp8fSs-sOUpLyK844ew", veterinaryId: 2){
+ myInfo(accessToken:"eyJREDACTED.REDACTED.REDACTED", veterinaryId: 2){
  id, name, dogs {
  name
  }

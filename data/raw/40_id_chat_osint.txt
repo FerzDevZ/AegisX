@@ -1,0 +1,29 @@
+User: Apa itu OSINT dan bagaimana memulainya untuk bug bounty?
+AegisX: OSINT (Open Source Intelligence) adalah pengumpulan informasi dari sumber publik tanpa menyentuh target secara langsung. Untuk bug bounty, mulai dengan mengumpulkan aset: daftar subdomain, IP publik, sertifikat TLS, dan teknologi yang dipakai. Alat yang umum: Google dorking dan GitHub search untuk menemukan kode yang bocor, Shodan/Censys untuk perangkat yang terpapar internet, serta database kebocoran seperti HaveIBeenPwned untuk akun yang terkompromi. Aturan emasnya: semua sumber harus publik dan legal, dan catat setiap temuan dengan timestamp karena info yang kita kumpulkan bisa berubah.
+
+User: Apa itu Google dorking dan berikan contoh yang aman?
+AegisX: Google dorking adalah teknik memakai operator pencarian khusus untuk menemukan informasi yang tidak sengaja terpublikasi. Contoh operator: site: untuk membatasi domain, inurl: untuk kata di URL, filetype: untuk jenis file, intitle: untuk judul halaman, dan ext: untuk ekstensi file. Untuk target yang kamu boleh uji, contoh pencarian: site:target.com filetype:env (mencari file environment yang bocor), site:target.com inurl:admin, atau site:target.com ext:bak. Penting: jangan pernah memakai dorking untuk domain yang bukan milikmu atau tanpa izin program bug bounty.
+
+User: Apa itu Shodan dan apa gunanya dalam reconnaissance?
+AegisX: Shodan adalah mesin pencari untuk perangkat yang terhubung internet, bukan halaman web. Ia mengindeks banner layanan, port terbuka, dan metadata perangkat. Gunanya dalam reconnaissance: menemukan perangkat target yang terpapar (server, router, kamera, ICS/SCADA), menemukan versi layanan lama yang rentan, dan memetakan permukaan serangan tanpa mengirim satu pun paket ke target. Query umum: port: untuk memfilter port, country: untuk negara, ssl.cert.subject.cn: untuk sertifikat. Ingat, melihat banner diindex Shodan itu pasif; memindai langsung butuh izin.
+
+User: Bagaimana cara mengumpulkan subdomain secara efektif?
+AegisX: Gabungkan beberapa sumber agar hasilnya lengkap: sertifikat transparansi (crt.sh, Censys), search engine, DNS brute force dengan wordlist, dan transfer zone DNS. Alat seperti subfinder, amass, dan assetfinder menggabungkan sumber-sumber ini otomatis. Setelah dapat daftar, validasi dengan resolusi DNS dan cari subdomain yang menunjuk ke IP eksternal, karena itu target yang paling menarik. Jangan lupa subdomain lama yang tidak dipakai sering jadi titik lemah.
+
+User: Apa itu fingerprinting teknologi dan kenapa penting?
+AegisX: Fingerprinting adalah mengidentifikasi teknologi yang dipakai target: web server, framework, bahasa pemrograman, CMS, versi, dan middleware. Penting karena setiap teknologi dan versi punya daftar kerentanan yang dikenal; begitu tahu versinya, kita bisa mencocokkan CVE yang relevan. Caranya lewat header HTTP (Server, X-Powered-By), pola HTML, file khas (misalnya /wp-json untuk WordPress), dan fingerprinting pasif lain. Alat: whatweb, wappalyzer, httpx. Semua pasif dan aman.
+
+User: Apa itu GitHub dorking dan apa yang bisa ditemukan?
+AegisX: GitHub dorking adalah mencari kode yang bocor di repositori publik GitHub. Yang sering ditemukan: API key, token, password, file .env, konfigurasi server, kredensial database, dan endpoint internal. Pencarian memakai kata kunci target ditambah filter seperti path: untuk direktori dan extension untuk jenis file. Contoh: "target.com" password, path:.env, org:NamaPerusahaan token. Temuan ini termasuk informasi sensitif; pelaporan ke program bug bounty biasanya bernilai tinggi.
+
+User: Bagaimana menilai apakah sebuah temuan informasi bisa dilaporkan?
+AegisX: Nilai temuan ditentukan oleh dampaknya, bukan jumlah datanya. Tanya: apakah informasi ini membuka permukaan serangan? Mengandung kredensial yang masih aktif? Menampilkan data pribadi? Membocorkan rahasia bisnis? Informasi publik yang sudah dikenal (misalnya alamat email) biasanya diluar cakupan program. Baca kebijakan program terlebih dahulu, lalu uji dampak dengan cara paling tidak invasif. Selalu utamakan keterbatasan cakupan yang ditulis program dibandingkan teori.
+
+User: Apa bedanya reconnaissance pasif dan aktif?
+AegisX: Recon pasif mengumpulkan informasi dari pihak ketiga tanpa berinteraksi dengan target: search engine, sertifikat transparansi, arsip web, database publik. Recon aktif berinteraksi langsung dengan target: DNS query, port scan, HTTP request. Pasif tetap aman terhadap batas hukum dan tidak terdeteksi; aktif bisa melanggar kebijakan program atau aturan penyedia layanan. Aturan praktis: mulai pasif seluas mungkin, lalu aktif hanya pada aset yang jelas-jelas dalam cakupan program.
+
+User: Apa itu certificate transparency dan bagaimana memakainya?
+AegisX: Certificate Transparency (CT) adalah log publik dari semua sertifikat TLS yang diterbitkan, dan tujuannya memaksa CA transparan. Karena setiap sertifikat dicatat, kita bisa melihat semua nama domain dan subdomain yang pernah mendapat sertifikat. Ini cara paling andal menemukan subdomain, termasuk yang tersembunyi dari DNS atau tidak dipakai. Cari di crt.sh atau pakai API CT dari Censys/Google. Nilai tambah: sertifikat juga menunjukkan teknologi dan domain internal yang bisa jadi target.
+
+User: Apa saja kesalahan umum dalam fase OSINT?
+AegisX: Kesalahan umum: (1) menganggap semua informasi bisa dipakai tanpa memeriksa cakupan program, (2) mencampur recon pasif dengan aksi aktif tanpa izin, (3) langsung menyerang aset yang ditemukan padahal belum tentu milik target (subdomain yang sudah dijual atau di-hijack bisa jadi jebakan), (4) menyimpan data pribadi yang berlebihan padahal tidak diperlukan, dan (5) mempercayai hasil satu sumber saja. Dokumentasikan semua sumber, verifikasi silang, dan patuhi batas program.
