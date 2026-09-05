@@ -22,6 +22,7 @@ Run only some stages:  --stages 2,3   |   Re-run a finished stage:  --force
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import shutil
 import subprocess
@@ -41,6 +42,54 @@ STAGE_DIRS = {
 def run(cmd: list[str]) -> int:
     print(f"\n▶ {' '.join(cmd)}")
     return subprocess.run(cmd, cwd=str(REPO_ROOT), check=False).returncode
+
+
+def best_val_loss(stage_dir: Path) -> float | None:
+    """Baca history.csv (kolom: step,train_loss,val_loss,lr) dan ambil val_loss terbaik."""
+    hist = stage_dir / "history.csv"
+    if not hist.exists():
+        return None
+    best: float | None = None
+    try:
+        with hist.open("r", encoding="utf-8", newline="") as fh:
+            rows = list(csv.reader(fh))
+        idx = rows[0].index("val_loss") if rows else -1
+        for row in rows[1:]:
+            if len(row) <= idx:
+                continue
+            try:
+                v = float(row[idx])
+            except ValueError:
+                continue
+            best = v if best is None else min(best, v)
+    except (OSError, IndexError, csv.Error):
+        return None
+    return best
+
+
+def quality_gate(stage_dir: Path, stage_name: str, max_loss: float) -> bool:
+    """True bila val loss terbaik <= max_loss; False berarti tahap ini gagal dilatih.
+
+    Model dengan val loss di atas ambang menghasilkan teks ngawur (ditemukan di
+    deploy 2026-09-06: model 'selesai' tapi loss 9.9-16.8, lebih buruk dari
+    menebak acak ln(8192)=9.01). Lebih baik pipeline berhenti daripada export
+    model rusak.
+    """
+    loss = best_val_loss(stage_dir)
+    if loss is None:
+        print(f"  ⚠️ {stage_name}: history.csv tidak ada — gate dilewati (periksa manual)")
+        return True
+    ok = loss <= max_loss
+    icon = "✅" if ok else "🚫"
+    print(f"  {icon} {stage_name}: best val loss {loss:.4f} (ambang {max_loss})")
+    return ok
+
+
+# Ambang val loss: lampaui => tahap dianggap gagal & pipeline berhenti.
+# ln(vocab)=9.01 adalah titik buta total; beri sedikit di atasnya.
+MAX_PRETRAIN_VAL_LOSS = 6.0   # model lama sehat: 2.44 (vocab 4096)
+MAX_SFT_VAL_LOSS = 5.0        # SFT seharusnya membaik dari pre-train
+MAX_ALIGN_VAL_LOSS = 5.5      # DPO sedikit di atas SFT masih wajar
 
 
 def read_config(pt_path: Path) -> dict | None:
@@ -314,16 +363,32 @@ def main() -> None:
     t0 = time.time()
     if 1 in stages:
         ok = stage_1(args) and ok
+        if ok and not quality_gate(Path(args.base_dir) / STAGE_DIRS[1], "tahap 1 (pre-train)", MAX_PRETRAIN_VAL_LOSS):
+            print("\n🚫 tahap 1 gagal quality gate — SFT/DPO dibatalkan (jangan latih di atas bobot rusak).")
+            print("   Perbaikan: periksa data/korpus & LR, hapus folder tahap 1, jalankan ulang --stages 1.")
+            sys.exit(2)
     if 2 in stages:
         ok = stage_2(args) and ok
+        if ok and not quality_gate(Path(args.base_dir) / STAGE_DIRS[2], "tahap 2 (SFT)", MAX_SFT_VAL_LOSS):
+            print("\n🚫 tahap 2 gagal quality gate — DPO dibatalkan.")
+            sys.exit(2)
     if 3 in stages:
         ok = stage_3(args) and ok
+        if ok and not quality_gate(Path(args.base_dir) / STAGE_DIRS[3], "tahap 3 (DPO)", MAX_ALIGN_VAL_LOSS):
+            print("\n🚫 tahap 3 gagal quality gate — export dibatalkan.")
+            sys.exit(2)
 
     if not ok:
         print("\n✗ pipeline gagal di salah satu tahap — lihat log di atas.")
         sys.exit(1)
 
     base = Path(args.base_dir)
+    # Gate terakhir sebelum 'selesai': semua tahap yang dijalankan harus lolos
+    for n, name, thr in ((1, STAGE_DIRS[1], MAX_PRETRAIN_VAL_LOSS),
+                         (2, STAGE_DIRS[2], MAX_SFT_VAL_LOSS),
+                         (3, STAGE_DIRS[3], MAX_ALIGN_VAL_LOSS)):
+        if n in stages and not quality_gate(base / name, f"tahap {n}", thr):
+            sys.exit(2)
     print("\n✅ Pipeline selesai dalam %.1f menit" % ((time.time() - t0) / 60))
     for n, name in STAGE_DIRS.items():
         mp = base / name / "model.pt"
