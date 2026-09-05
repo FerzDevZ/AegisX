@@ -1,3 +1,1 @@
-# DEPRECATED: Transport Layer Protection Cheat Sheet
 
-The Transport Layer Protection Cheat Sheet has been deprecated.
