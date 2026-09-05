@@ -117,6 +117,7 @@ def main() -> None:
     parser.add_argument("--data", type=str, default="data/raw")
     parser.add_argument("--out", type=str, default="checkpoints/aegisx-mini")
     parser.add_argument("--tokenizer", type=str, default="", help="load existing tokenizer json (optional)")
+    parser.add_argument("--init-from", type=str, default="", help="continue training from this model.pt (SFT/continual pretrain of your own model)")
     parser.add_argument("--vocab-size", type=int, default=4096)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--n-layer", type=int, default=4)
@@ -148,8 +149,30 @@ def main() -> None:
     texts = load_texts(args.data)
     print(f"      {len(texts)} chunks loaded")
 
+    # --- Optional: continue from a previous checkpoint (SFT / continual) ---
+    init_from = Path(args.init_from) if args.init_from else None
+    resumed_cfg: ModelConfig | None = None
+    if init_from is not None:
+        if not init_from.exists():
+            raise FileNotFoundError(f"--init-from checkpoint not found: {init_from}")
+        ckpt = torch.load(init_from, map_location="cpu", weights_only=False)
+        resumed_cfg = ModelConfig.from_dict(ckpt["config"])
+        print(f"[init] resuming from {init_from} | {resumed_cfg}")
+        print(f"      arch args (--n-layer/--n-embd/...) ignored; checkpoint config wins.")
+
     print("[2/4] Building tokenizer")
-    if args.tokenizer:
+    if resumed_cfg is not None and not args.tokenizer:
+        # Reuse the tokenizer that lives next to the checkpoint.
+        sibling_tok = init_from.parent / "tokenizer.json"
+        if sibling_tok.exists():
+            tokenizer = ByteLevelBPETokenizer.load(str(sibling_tok))
+            print(f"      loaded from checkpoint dir {sibling_tok} ({tokenizer})")
+        else:
+            raise FileNotFoundError(
+                f"--init-from given but no tokenizer.json next to it ({sibling_tok}). "
+                "Pass --tokenizer explicitly."
+            )
+    elif args.tokenizer:
         tokenizer = ByteLevelBPETokenizer.load(args.tokenizer)
         print(f"      loaded from {args.tokenizer} ({tokenizer})")
     else:
@@ -161,14 +184,22 @@ def main() -> None:
     tokenizer.save(tok_path)
     print(f"      tokenizer saved to {tok_path}")
 
-    cfg = ModelConfig(
-        vocab_size=tokenizer.vocab,
-        block_size=args.block_size,
-        n_layer=args.n_layer,
-        n_head=args.n_head,
-        n_embd=args.n_embd,
-        dropout=args.dropout,
-    )
+    if resumed_cfg is not None:
+        cfg = resumed_cfg
+        if cfg.vocab_size != tokenizer.vocab:
+            raise ValueError(
+                f"checkpoint vocab {cfg.vocab_size} != tokenizer vocab {tokenizer.vocab}. "
+                "Use the tokenizer that matches the checkpoint."
+            )
+    else:
+        cfg = ModelConfig(
+            vocab_size=tokenizer.vocab,
+            block_size=args.block_size,
+            n_layer=args.n_layer,
+            n_head=args.n_head,
+            n_embd=args.n_embd,
+            dropout=args.dropout,
+        )
     print(f"      model params ~{cfg.param_count() / 1e6:.2f}M")
     (out_dir / "config.json").write_text(json.dumps(cfg.to_dict(), indent=2))
 
@@ -180,17 +211,29 @@ def main() -> None:
         print("        add more .txt files to data/raw for a smarter model.")
 
     model = GPT(cfg).to(device)
+    if resumed_cfg is not None:
+        missing, unexpected = model.load_state_dict(ckpt["state_dict"])
+        if missing or unexpected:
+            print(f"      ⚠️ load_state_dict: missing={len(missing)} unexpected={len(unexpected)}")
+        print("      ✓ checkpoint weights loaded")
     print(f"      device: {device}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1)
+    # SFT / continual runs on a small instruction set need a gentler LR so the
+    # model does not forget what it learned in pre-training.
+    sft_lr = args.lr
+    if resumed_cfg is not None and args.lr == 3e-4:  # user did not override --lr
+        sft_lr = 1e-4
+        print(f"      resumed run: using gentler lr {sft_lr} (override with --lr)")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=sft_lr, weight_decay=0.1)
     grad_accum = args.grad_accum
 
     # Cosine schedule with warmup
     def lr_at(step: int) -> float:
         if step < args.warmup_steps:
-            return args.lr * (step + 1) / args.warmup_steps
+            return sft_lr * (step + 1) / args.warmup_steps
         progress = (step - args.warmup_steps) / max(1, args.max_steps - args.warmup_steps)
-        return args.lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+        return sft_lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
     print("[4/4] Training")
     model.train()

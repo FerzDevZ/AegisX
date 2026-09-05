@@ -212,6 +212,80 @@ def test_chat_one_shot_returns_text(tmp_path):
     assert proc.stdout.strip()
 
 
+def test_train_init_from_resumes_checkpoint(tmp_path):
+    """Stage-2 SFT: --init-from loads a previous model.pt and continues."""
+    import subprocess
+    import sys
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out1 = tmp_path / "stage1"
+    # Stage 1: tiny pre-train.
+    proc1 = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out1),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "15", "--eval-every", "5", "--eval-iters", "2",
+            "--warmup-steps", "3",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc1.returncode == 0, proc1.stderr
+    assert (out1 / "model.pt").exists()
+    assert (out1 / "tokenizer.json").exists()
+
+    # Stage 2: SFT resuming stage-1 weights with --init-from (no arch args).
+    out2 = tmp_path / "stage2"
+    proc2 = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out2),
+            "--init-from", str(out1 / "model.pt"),
+            "--max-steps", "10", "--eval-every", "5", "--eval-iters", "2",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc2.returncode == 0, proc2.stderr
+    assert (out2 / "model.pt").exists()
+    assert "checkpoint weights loaded" in proc2.stdout
+    # Tokenizer must be reused from the checkpoint dir, not retrained.
+    import json
+    tok1 = json.loads((out1 / "tokenizer.json").read_text())
+    tok2 = json.loads((out2 / "tokenizer.json").read_text())
+    assert tok1 == tok2
+
+    # Stage 2 config must equal stage-1 config (arch comes from checkpoint).
+    import json as _json
+    c1 = _json.loads((out1 / "config.json").read_text())
+    c2 = _json.loads((out2 / "config.json").read_text())
+    assert c1 == c2
+
+
+def test_init_from_missing_checkpoint_fails(tmp_path):
+    """A missing --init-from path must error loudly, not train from scratch."""
+    import subprocess
+    import sys
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out),
+            "--init-from", str(tmp_path / "nope.pt"),
+            "--max-steps", "5",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "not found" in proc.stderr
+
+
 def test_build_dataset_seeded():
     tokenizer = ByteLevelBPETokenizer(vocab_size=512)
     tokenizer.train(SAMPLE)

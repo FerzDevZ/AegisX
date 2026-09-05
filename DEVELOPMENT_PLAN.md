@@ -21,7 +21,8 @@
 | Eval | ✅ `aegisx/eval.py`: 20 fixed Q (10 EN + 10 ID), keyword-coverage scoring |
 | Agent CLI | ✅ `aegisx/agent_cli.py`: model output → gated tool call |
 | Notebook (train) | ✅ no auto-push; manual export ZIP **with `knowledge/` folder + model card** for HF upload |
-| Notebook (finetune) | ✅ `notebooks/aegisx_finetune_colab.ipynb` — QLoRA Qwen2.5-3B → merged model |
+| Notebook (SFT own) | ✅ `notebooks/aegisx_sft_own_colab.ipynb` — stage 2: SFT of YOUR OWN from-scratch model (`--init-from`, no third-party base) |
+| Notebook (finetune Qwen) | ✅ optional `aegisx_finetune_colab.ipynb` — QLoRA Qwen2.5-3B (only if user wants a non-pure-zero path) |
 | Space app | ✅ RAG grounding: answers cite `knowledge/` sources (`hf/space_app.py`) |
 | Known gap | Corpus should grow to 5–50 MB over time; add writeups & Q&A rows |
 
@@ -125,7 +126,7 @@
 | **P3 (done)** | R1–R4 RAG knowledge layer ✅ (zero-dep keyword index, df-cache) | grounded answers with source ✅ |
 | **P3b (done)** | RAG wired into Space app ✅ (knowledge/ folder ships with export) | Space answers cite sources ✅ |
 | **P4 (done)** | A3 agent↔model wiring ✅ (`agent_cli.py`, gated) | agent demo on authorized lab target |
-| **P5 (scaffolded)** | QLoRA fine-tune notebook ✅ (run on Colab when ready) | decision: stay from-scratch or hybrid |
+| **P5 (done)** | **Pure-zero SFT** ✅ — stage-2 notebook (`--init-from` your own model + 925-row SFT text); QLoRA-Qwen kept only as optional non-zero alternative | model answers questions, still 100% own weights |
 
 **Next up:** run the full Colab training on the new 2.3 MB corpus with the bigger
 config (M1: `n_embd 512 / n_layer 8`), then run §5b eval and upload when the
