@@ -278,6 +278,55 @@ def _wiki_api(params: dict) -> dict:
     raise RuntimeError("wiki api: terlalu banyak percobaan")
 
 
+ID_WIKI_EXPORT = "https://id.wikipedia.org/w/index.php?title=Special:Export"
+
+
+def _wiki_export(titles: list[str]) -> str:
+    """Ambil wikitext beberapa artikel lewat Special:Export (newline-separated)."""
+    import time
+    import urllib.error
+    import urllib.parse
+
+    body = urllib.parse.urlencode({"pages": "\n".join(titles), "curonly": "1", "action": "submit"}).encode()
+    for attempt in range(5):
+        try:
+            req = urllib.request.Request(ID_WIKI_EXPORT, data=body, headers={"User-Agent": "aegisx-corpus/1.0"})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 4:
+                time.sleep(15 + 20 * attempt)
+                continue
+            raise
+    raise RuntimeError("wiki export: terlalu banyak percobaan")
+
+
+def _strip_wikitext(raw: str) -> str:
+    """Ubah wikitext Wikipedia menjadi teks biasa yang cukup bersih."""
+    import re
+
+    t = re.sub(r"<ref[^>]*/>", "", raw)
+    t = re.sub(r"<ref[^>]*>.*?</ref>", "", t, flags=re.S)
+    t = re.sub(r"<!--.*?-->", "", t, flags=re.S)
+    t = re.sub(r"\{\{[^{}]*\}\}", " ", t)  # template non-bersarang
+    t = re.sub(r"\{\{.*?\}\}", " ", t, flags=re.S)  # sisa template bersarang
+    t = re.sub(r"<[^>]+>", " ", t)
+    out: list[str] = []
+    for ln in t.splitlines():
+        s = ln.strip()
+        if not s or s[0] in "|!}{*#:" or s.startswith(("[[Berkas", "[[File", "[[Kategori", "[[Image")):
+            continue
+        s = re.sub(r"\[\[(?:[^]|]+\|)?([^]]+)\]\]", r"\1", s)  # [[x|label]] -> label
+        s = re.sub(r"\[https?://\S+\s+([^]]+)\]", r"\1", s)  # [url label] -> label
+        s = re.sub(r"\[https?://[^] ]+\]", "", s)
+        s = re.sub(r"''+'?", "", s)
+        s = re.sub(r"={2,}\s*(.*?)\s*={2,}", r"\1", s)  # heading -> teks polos
+        s = re.sub(r"[ \t]+", " ", s).strip()
+        if len(s) > 1:
+            out.append(s)
+    return "\n".join(out)
+
+
 def fetch_id_wikipedia(dest: Path, force: bool = False, max_articles: int = 900) -> bool:
     """Collect Indonesian Wikipedia security articles as plain text.
 
@@ -333,32 +382,41 @@ def fetch_id_wikipedia(dest: Path, force: bool = False, max_articles: int = 900)
         time.sleep(1.0)
     print(f"  = Wikipedia ID: {len(titles)} artikel (inti + subkategori)")
 
-    # Ekstraksi pelan (20 judul/batch + jeda) supaya tidak kena rate-limit.
-    # Menulis per batch & melewati judul yang sudah ada => bisa dilanjutkan.
+    # Ekstraksi via Special:Export: banyak judul per permintaan (newline-
+    # separated). Menulis per batch & melewati judul yang sudah ada.
+    import xml.etree.ElementTree as ET
+
     done: set[str] = set()
     if dest.exists():
         done = {ln[7:] for ln in dest.read_text(encoding="utf-8").splitlines() if ln.startswith("Judul: ")}
     fetched = 0
     target = min(len(titles), max_articles)
+    todo = [t for t in titles[:target] if t not in done]
     with dest.open("a", encoding="utf-8") as fh:
-        for i in range(0, target, 10):
-            batch = [t for t in titles[i:i + 10] if t not in done]
-            if not batch:
-                continue
+        for i in range(0, len(todo), 60):
+            batch = todo[i:i + 60]
             try:
-                d = _wiki_api({
-                    "action": "query", "prop": "extracts", "explaintext": "1",
-                    "titles": "|".join(batch), "format": "json",
-                })
+                xml_text = _wiki_export(batch)
             except Exception as exc:
-                print(f"  ✗ batch gagal (dilanjut nanti): {exc}")
-                time.sleep(8.0)
+                print(f"  ✗ export gagal (dilanjut nanti): {exc}")
+                time.sleep(6.0)
                 continue
-            for p in d.get("query", {}).get("pages", {}).values():
-                text = (p.get("extract") or "").strip()
-                if len(text) < 800:  # rintisan pendek tidak berguna
+            root = ET.fromstring(xml_text)
+            for page in root.iter():
+                if not page.tag.endswith("}page"):
                     continue
-                fh.write(f"Judul: {p.get('title', '')}\n\n{text}\n\n\n")
+                # namespace version bisa 0.10/0.11; petakan anak berdasarkan nama lokal
+                children = {ch.tag.rsplit("}", 1)[-1]: ch for ch in page}
+                title = (children.get("title").text or "").strip() if children.get("title") is not None else ""
+                # <text> ada di dalam <revision>, bukan anak langsung <page>
+                text_raw = next((el.text for el in page.iter()
+                                 if el.tag.rsplit("}", 1)[-1] == "text" and el.text), None)
+                if not title or not text_raw:
+                    continue
+                clean = _strip_wikitext(text_raw)
+                if len(clean) < 800:  # rintisan pendek tidak berguna
+                    continue
+                fh.write(f"Judul: {title}\n\n{clean}\n\n\n")
                 fetched += 1
             time.sleep(3.0)  # hormati rate limit
     print(f"    ✓ {fetched} artikel baru -> {dest.name} ({dest.stat().st_size / 1024 / 1024:.2f} MB total)")
