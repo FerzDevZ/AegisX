@@ -14,7 +14,7 @@
 |---|---|
 | Pipeline | ✅ Train → chat → export works end-to-end (verified on CPU + Colab) |
 | Tests | ✅ 77/77 passing (tokenizer, model, training, gate, RAG, agent CLI, eval, clean) |
-| Corpus | ✅ **26 MB / 194 files** — OWASP (ASVS + CheatSheetSeries penuh ~120 sheet), MITRE ATT&CK (enterprise + ICS + mobile), WSTG, PayloadsAllTheThings, CVE (NVD bulk ~38k), custom EN+ID |
+| Corpus | ✅ **~26 MB / 195 files** — OWASP (ASVS + CheatSheetSeries penuh ~120 sheet), MITRE ATT&CK (enterprise + ICS + mobile), WSTG, PayloadsAllTheThings, CVE (NVD bulk ~38k), custom EN+ID, Wikipedia ID keamanan siber (fetch resume-safe, `fetch_id_wikipedia`) |
 | Early stopping | ✅ stops at val-loss plateau, restores best weights |
 | AMP (T4) | ✅ mixed precision on CUDA (`--no-amp` to disable), ~1.5-2x faster |
 | History CSV | ✅ `history.csv` logs every eval; `aegisx.eval --history` appends scores per run |

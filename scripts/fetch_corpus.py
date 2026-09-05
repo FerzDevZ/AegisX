@@ -244,6 +244,127 @@ def fetch_all_owasp_cheatsheets(out_dir: Path, force: bool = False) -> int:
     return fetched
 
 
+ID_WIKI_API = "https://id.wikipedia.org/w/api.php"
+# Kategori Wikipedia Bahasa Indonesia yang relevan untuk keamanan siber.
+ID_WIKI_CATEGORIES = [
+    "Kategori:Keamanan_komputer",
+    "Kategori:Keamanan_informasi",
+    "Kategori:Kriptografi",
+    "Kategori:Peretasan",
+    "Kategori:Malware",
+    "Kategori:Virus_komputer",
+    "Kategori:Serangan_siber",
+    "Kategori:Perangkat_lunak_keamanan",
+]
+
+
+def _wiki_api(params: dict) -> dict:
+    import json
+    import time
+    import urllib.error
+    import urllib.parse
+
+    url = f"{ID_WIKI_API}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "aegisx-corpus/1.0"})
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 4:
+                time.sleep(10 + 15 * attempt)  # hormati rate limit, backoff
+                continue
+            raise
+    raise RuntimeError("wiki api: terlalu banyak percobaan")
+
+
+def fetch_id_wikipedia(dest: Path, force: bool = False, max_articles: int = 900) -> bool:
+    """Collect Indonesian Wikipedia security articles as plain text.
+
+    Lists pages in ID_WIKI_CATEGORIES, then fetches the full plain-text
+    extract of each (MediaWiki prop=extracts). Writes one growing .txt with
+    a 'Judul:' header per article. Public, no auth, respectful pagination.
+    """
+    def collect(cat: str) -> None:
+        """Ambil semua halaman dari satu kategori (dengan pagination)."""
+        cont = {}
+        while True:
+            params = {
+                "action": "query", "list": "categorymembers",
+                "cmtitle": cat, "cmtype": "page", "cmlimit": "200",
+                "format": "json",
+            }
+            params.update(cont)
+            try:
+                d = _wiki_api(params)
+            except Exception as exc:
+                print(f"  ✗ kategori {cat} gagal: {exc}")
+                return
+            for m in d.get("query", {}).get("categorymembers", []):
+                t = m.get("title", "")
+                if t and t not in seen:
+                    seen.add(t)
+                    titles.append(t)
+            cont = d.get("continue", {})
+            time.sleep(1.2)
+            if not cont:
+                return
+
+    import time
+
+    titles: list[str] = []
+    seen: set[str] = set()
+    # Level 1: kategori inti + subkategori satu tingkat ke bawah (lebih banyak).
+    cats: list[str] = list(ID_WIKI_CATEGORIES)
+    for cat in ID_WIKI_CATEGORIES:
+        try:
+            d = _wiki_api({
+                "action": "query", "list": "categorymembers",
+                "cmtitle": cat, "cmtype": "subcat", "cmlimit": "200",
+                "format": "json",
+            })
+        except Exception:
+            continue
+        for m in d.get("query", {}).get("categorymembers", []):
+            cats.append(m.get("title", ""))
+        time.sleep(1.0)
+    for cat in cats:
+        collect(cat)
+        time.sleep(1.0)
+    print(f"  = Wikipedia ID: {len(titles)} artikel (inti + subkategori)")
+
+    # Ekstraksi pelan (20 judul/batch + jeda) supaya tidak kena rate-limit.
+    # Menulis per batch & melewati judul yang sudah ada => bisa dilanjutkan.
+    done: set[str] = set()
+    if dest.exists():
+        done = {ln[7:] for ln in dest.read_text(encoding="utf-8").splitlines() if ln.startswith("Judul: ")}
+    fetched = 0
+    target = min(len(titles), max_articles)
+    with dest.open("a", encoding="utf-8") as fh:
+        for i in range(0, target, 10):
+            batch = [t for t in titles[i:i + 10] if t not in done]
+            if not batch:
+                continue
+            try:
+                d = _wiki_api({
+                    "action": "query", "prop": "extracts", "explaintext": "1",
+                    "titles": "|".join(batch), "format": "json",
+                })
+            except Exception as exc:
+                print(f"  ✗ batch gagal (dilanjut nanti): {exc}")
+                time.sleep(8.0)
+                continue
+            for p in d.get("query", {}).get("pages", {}).values():
+                text = (p.get("extract") or "").strip()
+                if len(text) < 800:  # rintisan pendek tidak berguna
+                    continue
+                fh.write(f"Judul: {p.get('title', '')}\n\n{text}\n\n\n")
+                fetched += 1
+            time.sleep(3.0)  # hormati rate limit
+    print(f"    ✓ {fetched} artikel baru -> {dest.name} ({dest.stat().st_size / 1024 / 1024:.2f} MB total)")
+    return fetched > 0
+
+
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 
@@ -350,6 +471,12 @@ def main() -> None:
 
     # Optional: whole OWASP CheatSheetSeries (adds any sheet not already saved).
     fetch_all_owasp_cheatsheets(out_dir, force=args.force)
+
+    # Indonesian Wikipedia security articles (bahasa Indonesia fluency).
+    # Selalu dijalankan: fungsi melewati artikel yang sudah ada (resume-safe).
+    wiki_dest = out_dir / "id_wikipedia_keamanan.txt"
+    if fetch_id_wikipedia(wiki_dest, force=args.force):
+        ok += 1
 
     # Add individual CVE records (JSON -> flatten to text).
     for cve_id in CVE_SAMPLE_IDS:
