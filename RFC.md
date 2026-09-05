@@ -1,210 +1,204 @@
-# RFC: AegisX — Personal Cybersecurity AI Model
+# RFC: AegisX — Model AI Keamanan Siber Pribadi (Pure Zero)
 
-**Status:** Draft v1.0
-**Author:** Freebuff Superpower Ultra (via `@architect` + `@ai-engineer` + `@threat-modeler-stride`)
-**Goal:** A personal AI assistant named **AegisX**, chat-shaped like Kimi/GPT/DeepSeek, specialized for cybersecurity: pentesting, defense, attack technique analysis, bug hunting, and bug bounty support. Runs on a low-spec ("potato") laptop.
+**Status:** Implemented (v0.7) — mengikuti keputusan yang diambil di sesi desain
+**Author:** Freebuff (via `@architect` + `@ai-engineer` + `@threat-modeler-stride`)
+**Repo:** https://github.com/FerzDevZ/AegisX
+**Goal:** Asisten AI pribadi bernama **AegisX**, berbentuk chat seperti
+Kimi/GPT/DeepSeek, terspesialisasi keamanan siber (pentest, defense, analisis
+teknik serangan, perburuan bug, bug bounty), dwibahasa EN/ID — dilatih **dari
+nol (pure zero)**, ringan, gratis, di laptop spesifikasi rendah ("kentang").
+
+> ⚠️ **Perbedaan penting dengan RFC versi awal:** RFC sebelumnya mengusulkan
+> fine-tune QLoRA di atas model terbuka (Qwen/Llama) sebagai jalur utama, dan
+> from-scratch hanya "Opsi A". Setelah diskusi, **pemilik memilih jalur pure
+> zero**: model dilatih dari inisialisasi acak dengan data sendiri, tanpa base
+> model pihak ketiga. Dokumen ini mencerminkan arsitektur yang **benar-benar
+> diimplementasikan**.
 
 ---
 
-## 1. Reality Check (read this first)
+## 1. Reality Check (baca dulu)
 
-| What you want | What is physically possible on a potato laptop |
+| Pertanyaan | Fakta |
 |---|---|
-| Train a model from scratch like GPT-4 / DeepSeek | ❌ Impossible — requires thousands of GPUs, TBs of data, millions of $ |
-| Own a personal AI model "like the big ones" | ✅ Fine-tune an open-weights model (Qwen, Llama, Mistral) → it becomes **your** model, specialized for cysec |
-| Full-power pentest/bug-bounty assistant | ✅ Fine-tuned model + RAG knowledge base + agentic tool layer |
+| Bisa punya model "seperti GPT/Kimi/DeepSeek" yang dilatih dari nol di laptop kentang? | ❌ Untuk skala itu tidak. Training model raksasa butuh ribuan GPU + TB data + jutaan dolar |
+| Bisa punya **model milik sendiri**, ringan & enteng, dilatih dari nol? | ✅ **Ya — inilah AegisX-Mini**: ±30M param, GPT-style decoder-only, dilatih di **Colab/Kaggle gratis**, laptop tidak pernah melatih |
+| Apa batas jujurnya? | Model skala ini adalah *imitator teks*, bukan penalar penuh. Tanpa RAG & agent layer ia akan menghalusinasi ID CVE/perintah. **RAG grounding + agent ter-gate** adalah kompensasi utamanya |
+| Jadi kenapa pure zero, bukan fine-tune Qwen 3B? | Keputusan pemilik: 100% weight & data sendiri (belajar penuh + kepemilikan). Trade-off kapabilitas diterima secara sadar; jalur fine-tune model besar tetap dicatat sebagai opsi masa depan (§11) |
 
-**Conclusion:** AegisX = open-weights base model, fine-tuned with **QLoRA** on a curated cybersecurity dataset, served locally via **Ollama**, augmented with a **RAG** knowledge base and an **agent tool layer** for recon/scanning. This is exactly how real teams ship "their own" specialized models.
+**Kesimpulan:** AegisX-Mini = GPT kecil dari nol + tokenizer BPE sendiri +
+**pipeline 3 tahap** (pre-train → SFT → DPO) + **RAG v2** + **agent ReAct
+ter-gate**, dilatih di Colab/Kaggle gratis, disajikan di Hugging Face Space.
 
 ---
 
-## 2. High-Level Architecture
+## 2. Arsitektur (yang diimplementasikan)
 
 ```mermaid
 graph TD
-    U[User: Chat UI / CLI / API] --> A[Agent Layer]
-    A -->|tool_calls| T[Recon & Scanner Tools: nmap, nuclei, ffuf, curl, semgrep...]
-    A -->|grounding| R[RAG: Vector DB + Hybrid Search]
-    A --> M[AegisX Core: QLoRA fine-tuned LLM]
-    M --> O[Runtime: Ollama / llama.cpp, GGUF quantized]
-    R --> E[Local Embeddings: BGE-M3]
-    T --> G[Authorization Gate: target allowlist + audit log]
+    U[User: Space Gradio / CLI] --> A[Agent Layer: ReAct loop + AuthorizationGate]
+    A -->|grounding| R[RAG v2: BM25 + section-aware chunking]
+    A --> M[AegisX Core: GPT ±30M, pure zero]
+    M --> P[Pipeline 3 tahap: pre-train 4096→ SFT → DPO]
+    R --> K[knowledge/ corpus 46 MB]
+    T[Target allowlist + audit log] --> A
 ```
 
-### Components
-1. **Runtime (bottom layer)** — Ollama serving a GGUF-quantized model; OpenAI-compatible API so any chat UI can talk to AegisX.
-2. **AegisX Core** — the fine-tuned model (base + LoRA merged), specialized in cysec knowledge and tool usage.
-3. **RAG Knowledge Base** — CVE data, OWASP guides, pentest playbooks, bug-bounty writeups, retrieved on demand to ground answers and reduce hallucination.
-4. **Agent Layer** — lets AegisX *do* things: run recon/scan tools, search code, query the KB.
-5. **Authorization Gate** — every offensive action requires an explicitly allow-listed target. Non-negotiable.
+### Komponen
+1. **Core model** — `aegisx/model.py`: GPT decoder-only (config `vocab 8192 ·
+   block 768 · n_layer 8 · n_head 8 · n_embd 512`), tied embedding, tanpa bias
+   pada LayerNorm/QKV (pola nanoGPT, ratusan baris PyTorch murni).
+2. **Tokenizer** — `aegisx/tokenizer.py`: byte-level BPE **tanpa dependensi
+   eksternal**, dilatih dari korpus sendiri. Vocab 8.192 cukup efisien untuk
+   dwibahasa; byte-fallback menjamin tidak ada token unknown.
+3. **Pipeline 3 tahap** — `scripts/pipeline_full.py`:
+   `aegisx-mini` (pre-train) → `aegisx-sft` (SFT) → `aegisx-align` (DPO).
+4. **RAG** — `aegisx/rag.py`: zero-dependency, BM25 + section-aware chunking.
+5. **Agent** — `aegisx/agent_cli.py`: ReAct loop; `aegisx/gate.py` +
+   `aegisx/agent.py` membatasi tool pada target ter-allowlist.
+6. **Serving** — `hf/space_app.py`: Gradio; int8 di CPU, streaming; ZeroGPU opsional.
 
 ---
 
-## 3. Hardware Tiers (pick yours)
+## 3. Pipeline 3 tahap
 
-| Tier | Hardware | Base model | What you get |
+| Tahap | Input | Output | Tujuan |
 |---|---|---|---|
-| **P0 (potato)** | 8 GB RAM, no GPU | Qwen2.5-3B-Instruct or Llama-3.2-3B, Q4_K_M (~2.5 GB) | Chat + RAG + basic agent tools. Fine-tuning done on free Google Colab, not locally |
-| **P1 (decent)** | 16 GB RAM, no GPU | Qwen2.5-7B-Instruct, Q4_K_M (~5 GB) | Stronger reasoning, bigger KB, QLoRA fine-tune possible on CPU (slow) or Colab |
-| **P2 (gaming)** | NVIDIA GPU 6 GB+ VRAM | Qwen2.5-7B / 14B + QLoRA | Fast local fine-tuning with Unsloth, near-full power |
+| **① Pre-train** | `data/raw/` (46 MB, 212 file) | `checkpoints/aegisx-mini/` | Belajar bahasa & pola teks keamanan siber (next-token prediction) |
+| **② SFT** | `data/finetune/instructions.jsonl` (1.371, 80% ID) | `checkpoints/aegisx-sft/` | Belajar format tanya-jawab `User:…AegisX:…` → mulai *menjawab* |
+| **③ DPO** | `data/finetune/preferences.jsonl` (1.386) | `checkpoints/aegisx-align/` | Belajar preferensi jawaban: mengikuti pengguna, menolak permintaan berbahaya/di luar cakupan dengan sopan |
 
-> Unknown yet: your exact RAM/GPU. This is the one variable that changes the base-model choice.
+**Hiperparameter & mekanisme kunci:**
+- Pre-train: `batch 16 × grad_accum 4`, `max_steps 1500`, `lr 3e-4` +
+  warmup 400, cosine decay; AMP aktif di CUDA (`--no-amp` untuk mati).
+- **Early stop** dengan patience + restore bobot terbaik (mencegah overfit).
+- **Resume & checkpoint berkala**: `model_latest.pt` tiap N step; saat resume
+  LR otomatis diperlembut (anti-catastrophic-forgetting).
+- **Auto-arsip**: checkpoint arsitektur lama dipindah ke
+  `archive-{vocab}-{block}/` sebelum retrain — tidak pernah crash vocab
+  mismatch. Perbandingan arsitektur memakai **struktural** (block/layer/head/
+  embd), bukan vocab mentah (BPE byte-fallback membuat vocab aktual ≠ target).
+- SFT & DPO: LR kecil terpisah; DPO memakai reference model beku, beta 0.05,
+  loss panjang-dinormalisasi.
 
 ---
 
-## 4. Dataset Plan (what makes AegisX "cysec")
+## 4. Data (aset utama)
 
-Fine-tuning a specialty model is ~90% dataset quality. Target **5,000–20,000 high-quality instruction samples** in ChatML format (`<|im_start|>user / assistant`).
-
-| Domain | Sources | Example topics |
+| Aset | Ukuran | Catatan lisensi |
 |---|---|---|
-| **Offensive / Pentest** | OWASP WSTG, PortSwigger labs, PTES methodology | Recon, exploitation, privilege escalation, tool usage (nmap, nuclei, sqlmap, ffuf) |
-| **Defensive** | OWASP Top 10, hardening guides, CIS benchmarks | Detection, hardening, incident response, log analysis, secure coding |
-| **Bug bounty** | Publicly disclosed HackerOne/Intigriti reports (sanitized) | How to read a program scope, write a report, triage a finding |
-| **Vulnerability intel** | CVE descriptions, exploit-db writeups | Explain CVE, assess severity, suggest mitigation |
-| **Tool skill** | Man pages + usage examples | "How do I run nuclei with -severity high against this target?" |
+| Korpus mentah `data/raw/` | ±46 MB / 212 file | OWASP (CC BY-SA), MITRE ATT&CK, CVE NVD, HackTricks (CC BY-NC, atribusi), PayloadsAllTheThings, Wikipedia ID, chat ID sendiri |
+| Instruksi SFT | 1.371 baris (80.3% ID) | dibuat dari file chat `User:/AegisX:` |
+| Preferensi DPO | 1.386 pasangan | chosen/rejected, mayoritas ID |
+| Porsi bahasa Indonesia | korpus 2.8% · instruksi 80% | **gap: naikkan korpus ID ke 15–20%** |
 
-Rules: no proprietary/violating content, no live target data; everything from public training sources or synthetic generation. Quality over quantity.
-
----
-
-## 5. Training Pipeline (QLoRA)
-
-1. **Where:** Free Google Colab (T4 GPU) if no local GPU — your laptop never breaks a sweat; you just download the finished LoRA.
-2. **Tooling:** Unsloth (4x faster, minimal VRAM) or `peft` + `bitsandbytes`.
-3. **Hyperparameters (proven defaults):** 4-bit NF4 quantization, `lora_r=16`, `lora_alpha=32`, `lr=2e-4`, 3 epochs, `max_seq_len=2048–4096`, packing on.
-4. **Output:** Merge LoRA into base → export to GGUF (Q4_K_M) → import into Ollama as a new model named `aegisx`.
+Aturan: hanya teks publik berlisensi sah; tanpa data privat; tanpa data target
+live. Pipeline fetch: `scripts/fetch_corpus.py`; pembersihan:
+`scripts/clean_corpus.py` (termasuk **sanitasi pola secret**); audit bahasa:
+`scripts/audit_language.py`.
 
 ---
 
-## 6. RAG Pipeline
+## 5. RAG v2 (jawaban grounded)
 
-- **Corpus:** CVE dataset (subset), OWASP docs, pentest playbooks, tool cheatsheets.
-- **Chunking:** recursive markdown / semantic chunking with title+section metadata prepended.
-- **Embeddings:** local BGE-M3 (no cloud API — stays private on the potato).
-- **Vector DB:** Chroma (P0) or Qdrant (P1+).
-- **Search:** hybrid BM25 + dense with Reciprocal Rank Fusion, then a cross-encoder reranker, top-5 into context with citations.
+Model kecil tidak bisa menghafal detail semua CVE dari bobot — RAG memberi
+dokumen untuk dikutip, dan ini kompensasi kapabilitas terbesar setelah data.
 
----
-
-## 7. Agent Tool Layer ("Full Power")
-
-Expose OpenAI-compatible **tool calling** (Ollama supports it):
-
-- `recon` — nmap, subfinder, nuclei (template-based scanning)
-- `web` — ffuf fuzzing, curl requests
-- `code_search` — ripgrep, semgrep SAST scans
-- `kb` — RAG query
-- `write_report` — generates a bug-bounty report draft
-
-**Authorization Gate (mandatory):**
-- Targets must be pre-registered in an allowlist (files like `targets/authorized.txt`).
-- Every tool invocation is logged (timestamp, command, target).
-- No sudo, no lateral movement, no actions outside the allowlist.
-- System prompt states the rule; the gate enforces it at runtime.
-
-This is both the ethical and legal boundary — bug bounty only ever targets in-scope, authorized programs.
+1. **Chunking section-aware** per heading markdown; tiap chunk membawa
+   breadcrumb 2 level (`§ Bab > Sub-bab`) → kata kunci heading ikut tersimpan.
+2. **BM25 asli** (k1=1.5, b=0.75, IDF sesungguhnya).
+3. **Rerank**: bonus kata kunci di area heading + diversity antar-sumber.
+4. **Ambang skor relatif**: hasil <25% skor terbaik dibuang → konteks bersih.
+5. Di Space: `knowledge/` di-build saat start; jawaban menampilkan `📚 Sumber:`.
 
 ---
 
-## 8. STRIDE Security Matrix (AegisX platform itself)
+## 6. Agent & keamanan
+
+ReAct loop (rencana → tool → refleksi, max 5 round = circuit breaker).
+Semua aksi melewati **AuthorizationGate**:
+
+1. Target allowlist (`targets/authorized.txt`) — di luar daftar = ditolak
+2. Audit log berstempel waktu (`logs/audit.log`)
+3. Eksekusi aman: tanpa `sudo`, tanpa metakarakter shell, jalan sebagai `argv`
+4. `--confirm` → konfirmasi manusia sebelum tool berjalan
+5. Sesi SQLite (`--session`/`--resume`) → putus koneksi tidak menghapus konteks
+
+Tool: recon port, web, code search, penulisan laporan — semuanya untuk target
+**yang kamu miliki / punya izin tertulis** (bug bounty = in-scope).
+
+---
+
+## 7. STRIDE Security Matrix (platform AegisX sendiri)
 
 | Threat | Risk | Mitigation |
 |---|---|---|
-| **Spoofing** (someone else uses your model / prompt injection) | High | API-key auth on the server; prompt-injection hardening; refuse to follow injected instructions in tool results |
-| **Tampering** (dataset/model poisoning) | High | Pin dataset hashes, provenance tracking, re-verify LoRA checksum on import |
-| **Repudiation** (deny actions taken) | Medium | Full audit log of every tool call + model output |
-| **Information Disclosure** (leak secrets / out-of-scope data) | High | Local-first (nothing leaves laptop); RAG only returns allow-listed corpus; secret-scanning on outputs |
-| **Denial of Service** (model overload) | Low | Local single-user; simple rate limit on API |
-| **Elevation of Privilege** (agent escapes sandbox) | High | Tools run unprivileged, in a container; allowlist enforcement; no `--privileged` |
+| **Spoofing** (orang lain memakai model / prompt injection) | High | Prompt-injection hardening di data (DPO menolak instruksi terselip); guardrail berlapis di peta jalan; akses Space publik tapi read-only |
+| **Tampering** (poisoning dataset/model) | High | Sumber data publik berlisensi + sanitasi secret; korpus diverifikasi lewat git; model card menyertakan provenance |
+| **Repudiation** (menyangkal aksi) | Med | Audit log lengkap tiap tool call + output |
+| **Information Disclosure** (bocor secret / data di luar scope) | High | RAG hanya membaca korpus allow-listed; sanitasi pola secret otomatis di corpus; sistem prompt melarang target non-otorisasi |
+| **Denial of Service** (overload model) | Low | Single-user; Space gratis CPU; batas max tokens |
+| **Elevation of Privilege** (agent lolos sandbox) | High | Gate: allowlist + no-sudo + argv-only; tool berjalan unprivileged |
 
 ---
 
-## 9. Roadmap
+## 8. Lingkungan training & hosting
 
-| Phase | Deliverable | Time (est.) |
-|---|---|---|
-| **0. Setup** | Install Ollama, confirm hardware tier, benchmark tokens/sec | 1 day |
-| **1. Base chat** | AegisX answering cysec questions on the base model | Day 1–2 |
-| **2. RAG** | Vector DB + hybrid search working; grounded answers | Day 3–5 |
-| **3. Fine-tune** | Dataset built → QLoRA on Colab → `aegisx` model in Ollama | Week 2 |
-| **4. Agent layer** | Tool calling + authorization gate + audit log | Week 3 |
-| **5. Eval & harden** | Cyseceval-style benchmark, red-team the model, fix weak spots | Week 4 |
+| Sumber daya | Detail |
+|---|---|
+| **Training** | Google Colab (T4 16 GB gratis) atau Kaggle GPU. Tokenizer ±30–90 mnt (sekali per vocab); training 1500 step ±1–1,5 jam; SFT ±15–20 mnt; DPO ±10 mnt |
+| **Penyimpanan** | Google Drive (`MyDrive/aegisx/checkpoints/…`) — hasil survive sesi putus |
+| **Hosting** | Hugging Face Space CPU gratis: int8 dynamic quantization (2–3× lebih cepat, memori ~4× lebih kecil) + streaming token; ZeroGPU = fp32 one-shot |
+| **Model Hub** | Opsional: simpan bobot di Hub, Space membaca lewat env `AEGISX_REPO` |
 
----
-
-## 10. Option A: Pure From-Scratch (AegisX-Mini) — "ringan & enteng"
-
-If you want a model **trained from zero on your own laptop**, that is genuinely possible — you just have to accept what scale buys you.
-
-| | Fine-tune (main plan) | Pure from-scratch (this option) |
-|---|---|---|
-| **What you train** | LoRA adapter on top of Qwen/Llama | Full weights from random init |
-| **Hardware** | Colab or any GPU | **CPU-only is fine** (potato-friendly) |
-| **Model size** | 3B–8B params | **4M–50M params** (file: 15–200 MB) |
-| **Training data** | 5k–20k curated Q&A | Raw cysec text corpus (20–200 MB) |
-| **Training time** | hours (GPU) | hours–days on CPU |
-| **Result** | Real assistant: answers, tool use | A model that *imitates* cysec text, autocompletes commands/code, generates plausible writeup-style text |
-| **Can it do bug bounty?** | Yes (with RAG + tools) | **No** — it pattern-matches; it will hallucinate CVE IDs and commands. Useful only as a demo/learning model or autocomplete |
-
-### From-scratch stack (all CPU-friendly, all free)
-1. **Architecture:** GPT-style decoder-only transformer, ~4–50M params (Karpathy `nanoGPT` pattern — a few hundred lines of PyTorch, well-documented, runs on CPU).
-2. **Tokenizer:** train a small BPE (vocab 4k–8k) on your cysec corpus, or char-level for the absolute minimum.
-3. **Dataset:** 20–200 MB of public cysec text (OWASP docs, man pages, CVE descriptions, sanitized writeups).
-4. **Training:** plain PyTorch on CPU. A 10M-param model over ~50M tokens ≈ a few hours (demo quality) to a few days (decent imitation).
-5. **Serving:** export to GGUF, run in Ollama — a 10M-param model generates instantly on any laptop.
-
-### The honest tradeoff
-A pure-from-scratch model on a potato will be **AegisX-Mini**: lightweight, fully yours, trains entirely on your laptop — but it is a *text imitator*, not an assistant. It cannot reason about a pentest target, plan an exploit chain, or answer "how do I scan X" correctly. Every real "own model" (even small ones) starts from an open base for capability; that's not cheating, it's how the industry works.
-
-**Recommended hybrid:** build AegisX-Mini from scratch first (fun, educational, satisfies "pure from zero"), and keep the fine-tuned AegisX for real bug-bounty work. Same laptop, both models in Ollama.
+Upload selalu **manual** (tidak ada auto-push) — pemilik memeriksa hasil dulu.
 
 ---
 
-## 11. Training Environment: Google Colab (free T4) + Hosting: Hugging Face
+## 9. Metrik & evaluasi
 
-Your chosen pipeline: **train/tune on Google Colab, host on Hugging Face.** This is a perfect fit for a 4 GB laptop — the laptop becomes a thin client; Colab does the compute, HF serves the model.
-
-### Google Colab (training)
-
-| Resource | Free tier | Enough for? |
-|---|---|---|
-| GPU | NVIDIA T4 (16 GB VRAM) | From-scratch AegisX-Mini (4–50M params): **minutes–hours** |
-| | | QLoRA fine-tune of Qwen 3B: a few hours |
-| RAM | ~12 GB | Fine for both paths |
-| Disk | ~78 GB | Plenty for datasets + checkpoints |
-| Limits | Session timeout + daily usage cap | Save checkpoints to Google Drive/HF Hub to survive disconnects |
-
-**Colab workflow:** a single notebook does: dataset build → train (from scratch OR QLoRA) → evaluate → export → **push weights straight to Hugging Face Hub** (`huggingface_hub` API). Nothing touches your laptop except the final download.
-
-### Hugging Face (hosting)
-
-| Option | Cost | Fit for AegisX |
-|---|---|---|
-| **Model Hub** | Free | Store AegisX-Mini weights + model card; the canonical artifact |
-| **Spaces + Gradio** | Free CPU tier (2 vCPU / 16 GB RAM) | Serve AegisX-Mini behind a chat UI with a public URL — perfect for testing |
-| **Serverless Inference** | Free-ish for small models | API calls without running a server |
-| **Inference Endpoints** | Paid, GPU-backed | Only if you later need production-grade serving of the fine-tuned model |
-
-**Recommended setup:** push weights to the Hub → create a CPU **Space** running a Gradio chat app that loads the model from the Hub → you get a public `hf.space` link to share and test. Because AegisX-Mini is only 15–200 MB, the free CPU tier handles it easily. (If you later fine-tune Qwen 3B, the free CPU Space will be too slow — that's when you'd use paid Endpoints or run it locally.)
-
-### End-to-end flow
-
-```mermaid
-graph LR
-    Laptop[4GB Laptop] -->|upload dataset / notebook| Colab[Google Colab T4]
-    Colab -->|train from scratch OR QLoRA| CKPT[Checkpoint]
-    CKPT -->|push via huggingface_hub| Hub[Hugging Face Model Hub]
-    Hub --> Space[Hugging Face Space: Gradio chat]
-    Space --> URL[Public test URL hf.space]
-    Hub -->|download GGUF| Ollama[Ollama on laptop: AegisX-Mini local]
-```
+- `aegisx/eval.py`: 20 soal tetap (10 EN + 10 ID), skor keyword-coverage,
+  `--history` CSV untuk membandingkan antar-run.
+- Run terbaik arsitektur lama: val loss **2.4387** (perplexity ≈ 11.5), jarak
+  train/val sehat — dari korpus 8,2M token. Arsitektur baru (8192/768, 46 MB)
+  adalah tolok ukur berjalan.
+- **Target berikutnya:** suite 100+ soal (50 ID + 50 EN, multi-turn) + laporan
+  HTML per run sebagai gate sebelum upload.
 
 ---
 
-## 12. Open Decisions (need your input)
+## 10. Roadmap & status
 
-1. **Hardware:** RAM amount? Any NVIDIA GPU? → determines P0/P1/P2.
-2. **Fine-tune location:** Local (if GPU) vs free Colab (recommended for potato).
-3. **Interface:** CLI first, web chat UI later, or both?
-4. **Scope of "attack":** read-only recon + scanning, or also exploit execution (authorized targets only)?
+| Fase | Status |
+|---|---|
+| Tokenizer + model + training CPU + chat + gate | ✅ v0.1 |
+| Colab T4 (AMP, resume, early-stop) + export manual → Space live | ✅ v0.2 |
+| RAG v1 → v2 (BM25 + section-aware) + `knowledge/` di export | ✅ v0.3 |
+| Agent ↔ model: ReAct + `--confirm` + sesi SQLite | ✅ v0.4 |
+| Pure-zero SFT (1.371 instruksi) | ✅ v0.5 |
+| Tahap-3 DPO (1.386 preferensi) + pipeline 1-tombol | ✅ v0.6 |
+| Korpus 46 MB · vocab 8192/block 768 · int8 + streaming Space | ✅ v0.7 |
+| Retrain bersih arsitektur baru di T4 · korpus ID → 15–20% · eval 100 soal · guardrails berlapis | 🔜 v0.8–v1.0 |
+
+---
+
+## 11. Alternatif masa depan (bila ingin kapabilitas lebih)
+
+Bila suatu saat pemilik menginginkan penalaran setara model besar, jalur yang
+tetap kompatibel dengan aset ini: **fine-tune model terbuka** (mis. Qwen2.5-3B
+via QLoRA/Unsloth, notebook `aegisx_finetune_colab.ipynb`) di atas **korpus
+yang sama**. Korpus, dataset instruksi, preferensi, RAG, agent, dan Space app
+semuanya bisa dipakai ulang — hanya "otak"-nya yang berganti. Ini bukan
+curang; ini cara industri bekerja. Keputusan tetap di pemilik.
+
+---
+
+## 12. Batas & etika
+
+- Model skala ±30M **belum layak** untuk keputusan keamanan produksi tanpa
+  review manusia; ia bisa menghalusinasi ID CVE/perintah.
+- Gunakan **hanya** untuk sistem yang kamu miliki atau diizinkan menguji.
+- Model menolak permintaan berbahaya/off-scope (diajarkan di tahap DPO) — jika
+  masih lolos, laporkan sebagai temuan red-team untuk data preferensi baru.
+
+*Dokumen ini hidup — perbarui tiap milestone (Rel4).*
