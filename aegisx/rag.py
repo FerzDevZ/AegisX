@@ -37,6 +37,7 @@ class CorpusIndex:
         self.chunk_chars = chunk_chars
         self.overlap_chars = overlap_chars
         self.chunks: list[Chunk] = []
+        self._df_cache: Optional[dict[str, int]] = None  # token -> doc freq
 
     # ------------------------------------------------------------------ #
     # Build
@@ -58,7 +59,16 @@ class CorpusIndex:
         for path in sorted(Path(directory).glob(pattern)):
             self.add_file(path)
             count += 1
+        self._df_cache = None  # invalidate after batch build
         return count
+
+    def _build_df(self) -> dict[str, int]:
+        """Document frequency per token, computed once over all chunks."""
+        df: dict[str, int] = {}
+        for chunk in self.chunks:
+            for tok in chunk.tokens:
+                df[tok] = df.get(tok, 0) + 1
+        return df
 
     def _chunk_text(self, text: str) -> list[str]:
         # Split on paragraph boundaries first (coherent units), then merge.
@@ -107,7 +117,9 @@ class CorpusIndex:
         return results
 
     def _doc_freq(self, token: str) -> int:
-        return sum(1 for c in self.chunks if token in c.tokens)
+        if self._df_cache is None:
+            self._df_cache = self._build_df()
+        return self._df_cache.get(token, 0)
 
     # ------------------------------------------------------------------ #
     # Convenience

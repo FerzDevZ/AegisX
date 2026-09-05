@@ -13,14 +13,16 @@
 | Area | State |
 |---|---|
 | Pipeline | ✅ Train → chat → export works end-to-end (verified on CPU + Colab) |
-| Tests | ✅ 59/59 passing (tokenizer, model, training, gate, RAG, agent CLI) |
-| Corpus | ✅ **2.2 MB / 49 files / ~2.6k chunks** — OWASP (30 sheets + ASVS), MITRE ATT&CK, CVE records, custom EN+ID |
+| Tests | ✅ 64/64 passing (tokenizer, model, training, gate, RAG, agent CLI, eval) |
+| Corpus | ✅ **2.3 MB / 54 files / ~2.6k chunks** — OWASP (30 sheets + ASVS), MITRE ATT&CK, CVE records, custom EN+ID |
 | Early stopping | ✅ stops at val-loss plateau, restores best weights |
 | Periodic checkpoint | ✅ `model_latest.pt` every eval (crash-safe long Colab runs) |
-| RAG | ✅ zero-dep `aegisx/rag.py`: chunk + retrieve with source (2,589 chunks) |
+| RAG | ✅ zero-dep `aegisx/rag.py`: chunk + retrieve with source (df-cache for fast builds) |
+| Eval | ✅ `aegisx/eval.py`: 20 fixed Q (10 EN + 10 ID), keyword-coverage scoring |
 | Agent CLI | ✅ `aegisx/agent_cli.py`: model output → gated tool call |
-| Notebook (train) | ✅ no auto-push; manual export ZIP for HF upload |
+| Notebook (train) | ✅ no auto-push; manual export ZIP **with `knowledge/` folder + model card** for HF upload |
 | Notebook (finetune) | ✅ `notebooks/aegisx_finetune_colab.ipynb` — QLoRA Qwen2.5-3B → merged model |
+| Space app | ✅ RAG grounding: answers cite `knowledge/` sources (`hf/space_app.py`) |
 | Known gap | Corpus should grow to 5–50 MB over time; add writeups & Q&A rows |
 
 ---
@@ -36,6 +38,7 @@
 | D3 | Add **bug-bounty writeup corpus** (public HackerOne/Intigriti disclosures, MITRE cve.org) | M | teaches report style |
 | D4 | Curate **Indonesian security content** (has some; expand: UU ITE, local labs, komunitas) | M | matches your usage language |
 | D5 | **Q&A-style rows** for the chat format (`User: ... AegisX: ...`) so fine-tuning later starts from good structure | M | makes it assistant-like |
+| D5b | ✅ **Indonesian chat corpus** — `data/raw/17_id_chat_bugbounty.txt` + `18_id_chat_defense.txt` (~25 KB, User:/AegisX: format) | done | fluency |
 | D6 | **Dedup + clean** the corpus (script): strip URLs/banners, dedup near-identical paragraphs | S | quality > quantity |
 
 **Rules (from `@writer`):** only public/properly-licensed text; no private data; no live target data; keep EN+ID balance.
@@ -48,11 +51,11 @@
 
 | # | Action | Effort | Impact |
 |---|---|---|---|
-| M1 | **Right-size the model to data** — with 1M+ tokens, raise config to the P1 profile: `n_embd 512 / n_layer 8 / n_head 8 / block_size 256` (~30M params) | S (edit config) | reasoning quality |
+| M1 | ✅ **Right-size the model to data** — config raised to: `n_embd 512 / n_layer 8 / n_head 8 / block_size 256`, `max_steps 6000`, `warmup 300` (~30M params) | done | reasoning quality |
 | M2 | **More steps** once data is big (max_steps 5k–20k is legitimate then — early stop keeps it honest) | S | fits big data |
 | M3 | **Learning-rate warmup + cosine already in** ✅ | — | — |
 | M4 | **Weight decay + grad clip already in** ✅ | — | — |
-| M5 | Optional: **checkpoint every eval** so a crash never loses >N minutes (currently only saves at end + best restore) | S | robustness |
+| M5 | ✅ **Periodic checkpoint** (`model_latest.pt` every eval) + best-weight restore — crash-safe long Colab runs | done | robustness |
 | M6 | **Measure tokens/sec** on T4 vs. your laptop; tune `batch_size × grad_accum` so each step ≈ full GPU (report says 39k tok/s ✅ good) | S | speed |
 | M7 | When data ≥5 MB: **train a second pass / longer schedule**, compare val loss | M | diminishing-returns check |
 
@@ -64,9 +67,10 @@
 
 | # | Action | Effort |
 |---|---|---|
-| Q1 | Add test: training on **tiny corpus with early stopping** completes and saves (guards the crash we fixed) | S |
-| Q2 | Add test: `--tokenizer` resume path (train once, resume second run with same tokenizer) | S |
-| Q3 | Add test: chat `generate()` one-shot mode returns non-empty string | S |
+| Q1 | ✅ Add test: training on **tiny corpus with early stopping** completes and saves (guards the crash we fixed) | done |
+| Q2 | ✅ Add test: `--tokenizer` resume path (train once, resume second run with same tokenizer) | done |
+| Q3 | ✅ Add test: chat `generate()` one-shot mode returns non-empty string | done |
+| Q4 | ✅ Add test: eval harness question set + coverage scoring | done |
 | Q4 | Periodic **`@refactor-expert` pass**: kill dead code, keep modules small | ongoing |
 | Q5 | After every feature: run `python3 -m pytest -q` (Gate 2) | always |
 
@@ -81,7 +85,7 @@
 | R1 | Chunk the corpus (recursive, title+section metadata) | M |
 | R2 | Embed locally (**BGE-M3**, no cloud) → Chroma/Qdrant | M |
 | R3 | Hybrid search (BM25 + dense) + rerank → top-5 context | M |
-| R4 | Wire retrieved context into the chat prompt (citation-style) | M |
+| R4 | ✅ Wire retrieved context into the chat prompt — **done end-to-end**: `knowledge/` folder ships in the export ZIP; `hf/space_app.py` builds a `CorpusIndex` over it, grounds each answer, and shows `📚 Sumber: ...` under replies | done |
 
 **Why it matters:** a 10–50M model cannot *know* CVE-2021-44228 details from weights alone; RAG gives it the document to quote. This is the single biggest capability boost after data.
 
@@ -118,12 +122,15 @@
 |---|---|---|
 | **P1 (done)** | D1 corpus fetch ✅; run full Colab training on real data | val loss plateaus, chat output readable |
 | **P2 (done)** | D2–D4 corpus expansion ✅ (CVE + OWASP + ATT&CK); Q1–Q3 tests ✅ | model live on HF (manual upload when ready) |
-| **P3 (done)** | R1–R4 RAG knowledge layer ✅ (zero-dep keyword index) | grounded answers with source ✅ |
+| **P3 (done)** | R1–R4 RAG knowledge layer ✅ (zero-dep keyword index, df-cache) | grounded answers with source ✅ |
+| **P3b (done)** | RAG wired into Space app ✅ (knowledge/ folder ships with export) | Space answers cite sources ✅ |
 | **P4 (done)** | A3 agent↔model wiring ✅ (`agent_cli.py`, gated) | agent demo on authorized lab target |
 | **P5 (scaffolded)** | QLoRA fine-tune notebook ✅ (run on Colab when ready) | decision: stay from-scratch or hybrid |
 
-**Next up:** run the full Colab training on the new 2.2 MB corpus (bigger config
-M1: `n_embd 512 / n_layer 8`), then decide from-scratch vs QLoRA with real numbers.
+**Next up:** run the full Colab training on the new 2.3 MB corpus with the bigger
+config (M1: `n_embd 512 / n_layer 8`), then run §5b eval and upload when the
+numbers look right. Expected T4 time: tokenizer ~1–2 min, then training until
+early stop (watch for `🛑`).
 
 **Golden rule:** data → model → measure → repeat. Every iteration ends with a
 val-loss number and a chat sample, so we can see improvement, not guess it.

@@ -1,9 +1,15 @@
 """AegisX-Mini Gradio chat app for Hugging Face Spaces (ZeroGPU-compatible).
 
 Supported layouts:
-  1. Model files INSIDE the Space (model.pt + tokenizer.json at repo root)
-     -> no env vars needed, simplest possible setup.
+  1. Model files INSIDE the Space (model.pt + tokenizer.json + optional
+     knowledge/ at repo root) -> no env vars needed, simplest possible setup.
   2. Model on the Hub: set AEGISX_REPO env var to your model repo id.
+
+RAG grounding:
+  If a `knowledge/` folder of .txt files sits next to the app (layout 1) or
+  inside the downloaded model repo (layout 2), each question first retrieves
+  the top relevant passages (aegisx.rag.CorpusIndex), the model answers with
+  that context, and the source file names are shown under the reply.
 
 The app is decorated with @spaces.GPU so it runs on the free ZeroGPU tier.
 Model inference falls back to CPU when no GPU is allocated.
@@ -21,7 +27,7 @@ try:
 except ImportError:  # pragma: no cover - local runs without the spaces lib
     spaces = None
 
-from aegisx.chat import generate
+from aegisx.rag import CorpusIndex
 
 CACHE = Path("/tmp/aegisx-model")
 CACHE.mkdir(parents=True, exist_ok=True)
@@ -29,12 +35,16 @@ CACHE.mkdir(parents=True, exist_ok=True)
 # Layout 1: model files shipped inside the Space repo root.
 LOCAL_MODEL = Path(__file__).resolve().parent / "model.pt"
 LOCAL_TOKENIZER = Path(__file__).resolve().parent / "tokenizer.json"
+LOCAL_KNOWLEDGE = Path(__file__).resolve().parent / "knowledge"
 
 REPO = os.environ.get("AEGISX_REPO", "")
+KNOWLEDGE_DIR: Path | None = None
 if LOCAL_MODEL.exists() and LOCAL_TOKENIZER.exists():
     MODEL_PATH = str(LOCAL_MODEL)
     TOKENIZER_PATH = str(LOCAL_TOKENIZER)
     print("Using model files shipped inside the Space.")
+    if LOCAL_KNOWLEDGE.is_dir() and any(LOCAL_KNOWLEDGE.glob("*.txt")):
+        KNOWLEDGE_DIR = LOCAL_KNOWLEDGE
 else:
     # Layout 2: fetch from a model repo on the Hub.
     from huggingface_hub import snapshot_download
@@ -44,6 +54,8 @@ else:
     snapshot_download(repo_id=REPO, local_dir=str(CACHE))
     MODEL_PATH = str(CACHE / "model.pt")
     TOKENIZER_PATH = str(CACHE / "tokenizer.json")
+    if (CACHE / "knowledge").is_dir() and any((CACHE / "knowledge").glob("*.txt")):
+        KNOWLEDGE_DIR = CACHE / "knowledge"
     print(f"Downloaded model from {REPO}")
 
 DEFAULT_SYSTEM = (
@@ -55,6 +67,8 @@ SYSTEM_PROMPT = os.environ.get("AEGISX_PROMPT", DEFAULT_SYSTEM)
 
 # Warm the model once at startup; ZeroGPU reuses it across requests.
 _model = None
+_index = None
+_knowledge_files: list[str] = []
 
 
 def _load_model():
@@ -69,6 +83,33 @@ def _load_model():
         _model = (model, tokenizer)
         print("Model loaded.")
     return _model
+
+
+def _load_knowledge() -> tuple[CorpusIndex, list[str]]:
+    """Build the retrieval index once over knowledge/*.txt (if any)."""
+    global _index, _knowledge_files
+    if _index is None and KNOWLEDGE_DIR is not None:
+        index = CorpusIndex()
+        index.add_dir(KNOWLEDGE_DIR)
+        _index = index
+        _knowledge_files = sorted(
+            {c.source for c in index.chunks}
+        )
+        print(f"Knowledge base: {len(index)} chunks from {len(_knowledge_files)} files.")
+    return _index, _knowledge_files
+
+
+def _retrieve_context(query: str, top_k: int = 3) -> tuple[str, list[str]]:
+    """Return (context_block, source_filenames) for the question, or empty."""
+    index, files = _load_knowledge()
+    if index is None or not files:
+        return "", []
+    results = index.retrieve(query, top_k=top_k)
+    if not results:
+        return "", []
+    sources = sorted({c.source for c in results})
+    ctx = index.format_context(results, max_chars_per=700)
+    return ctx, sources
 
 
 def _generate_text(prompt: str, temperature: float, max_tokens: int) -> str:
@@ -91,11 +132,25 @@ def _generate_text(prompt: str, temperature: float, max_tokens: int) -> str:
     return tokenizer.decode(out[0].tolist()[len(ids):]).strip()
 
 
-def respond(message: str, history: list, temperature: float, max_tokens: int) -> str:
-    prompt = SYSTEM_PROMPT + "User: " + message + "\n\nAegisX: "
+def respond(message: str, history: list, temperature: float, max_tokens: int) -> tuple[str, list[str]]:
+    # RAG: pull relevant passages + sources before building the prompt.
+    context, sources = _retrieve_context(message)
+    if context:
+        prompt = (
+            SYSTEM_PROMPT
+            + "Use the references below to answer when they are relevant. "
+            + "If the answer is not in the references, say so honestly.\n\n"
+            + "References:\n" + context
+            + "\n\nUser: " + message + "\n\nAegisX: "
+        )
+    else:
+        prompt = SYSTEM_PROMPT + "User: " + message + "\n\nAegisX: "
+
     if spaces is not None:
-        return _respond_gpu(prompt, temperature, max_tokens)
-    return _generate_text(prompt, temperature, max_tokens)
+        reply = _respond_gpu(prompt, temperature, max_tokens)
+    else:
+        reply = _generate_text(prompt, temperature, max_tokens)
+    return reply, sources
 
 
 if spaces is not None:
@@ -110,7 +165,11 @@ else:
 
 
 with gr.Blocks(title="AegisX-Mini") as demo:
-    gr.Markdown("# ⚡ AegisX-Mini\nA lightweight cybersecurity model trained from scratch.")
+    gr.Markdown(
+        "# ⚡ AegisX-Mini\nA lightweight cybersecurity model trained from scratch. "
+        "\n\n_Answers are grounded in a local knowledge base when available — "
+        "sources appear under each reply._"
+    )
     chatbot = gr.Chatbot(height=500)
     msg = gr.Textbox(placeholder="Ask about recon, scanning, defense, bug bounty...")
     with gr.Row():
@@ -145,7 +204,9 @@ with gr.Blocks(title="AegisX-Mini") as demo:
         ]
 
     def chat_fn(message, history, temperature, max_tokens):
-        reply = respond(message, history, temperature, max_tokens)
+        reply, sources = respond(message, history, temperature, max_tokens)
+        if sources:
+            reply = reply + "\n\n📚 Sumber: " + ", ".join(sources)
         conv = _to_tuples(history) + [("user", message), ("assistant", reply)]
         return "", _to_messages(conv)
 
