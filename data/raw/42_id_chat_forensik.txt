@@ -1,0 +1,29 @@
+User: Apa itu digital forensik dan mengapa penting?
+AegisX: Digital forensik adalah proses mengumpulkan, melestarikan, menganalisis, dan menyajikan bukti digital secara ilmiah agar bisa diterima di pengadilan atau proses resmi. Penting karena bukti digital itu rapuh: sekali dimodifikasi, kredibilitasnya hilang. Prinsip utamanya: jangan mengubah bukti asli (gunakan salinan), dokumentasikan setiap langkah, dan pastikan rantai penjagaan (chain of custody) tercatat dari awal sampai akhir.
+
+User: Apa itu chain of custody?
+AegisX: Chain of custody adalah catatan berkelanjutan tentang siapa yang memegang bukti, kapan, di mana, dan apa yang dilakukan terhadap bukti tersebut. Tujuannya membuktikan bukti tidak diubah atau diakses tanpa izin sejak diamankan sampai diserahkan ke pengadilan. Setiap perpindahan tangan harus didokumentasikan dengan waktu, nama, dan alasan. Tanpa chain of custody yang lengkap, bukti bisa ditolak karena dianggap tidak dapat dipercaya.
+
+User: Bagaimana cara membuat salinan forensik yang benar?
+AegisX: Salinan forensik dibuat dengan imaging bit-for-bit (misalnya memakai dd, dc3dd, atau FTK Imager) sehingga menyalin seluruh media termasuk area yang dihapus dan slack space, bukan hanya file yang terlihat. Sebelum menyalin, gunakan write blocker agar perangkat asli tidak berubah. Selalu hitung hash (MD5, SHA-1, atau SHA-256) media asli dan salinannya; hash harus sama persis sebagai bukti integritas.
+
+User: Apa bedanya live forensics dan dead forensics?
+AegisX: Live forensics menganalisis sistem yang sedang berjalan untuk menangkap data volatile seperti proses, koneksi jaringan, memori, dan RAM, karena data itu hilang begitu sistem dimatikan. Dead forensics menganalisis salinan media setelah sistem dimatikan, yang lebih stabil dan tidak mengubah keadaan. Aturan umum: data volatile harus dikumpulkan pertama kali (RAM sebelum hard disk), dan kecepatan pengumpulan penting karena semakin lama berjalan, semakin banyak bukti yang berubah.
+
+User: Mengapa RAM penting dalam forensik?
+AegisX: RAM menyimpan data volatile yang tidak ada di disk: proses yang berjalan, kredensial plaintext, kunci dekripsi, perintah yang dieksekusi, dan sisa-sisa malware yang hanya hidup di memori. Malware modern sering fileless yang tidak menyentuh disk. Karena itu menangkap memori (memory dump) dengan alat seperti LiME atau WinPmem harus menjadi prioritas pertama, sebelum sistem dimatikan, karena sekali reboot data RAM hilang.
+
+User: Apa itu timeline analysis dalam forensik?
+AegisX: Timeline analysis menyusun kejadian berdasarkan waktu dari berbagai sumber: file system timestamps (created, modified, accessed), log sistem, log aplikasi, riwayat browser, dan artefak lain. Tujuannya merekonstruksi urutan kejadian: kapan malware masuk, apa yang dilakukan, dan bagaimana menyebar. Alat seperti fls dan mactime dari Sleuth Kit membantu membuat kronologi. Timeline adalah cara paling efektif untuk menjawab pertanyaan "apa yang terjadi" dan "kapan".
+
+User: Apa saja artefak Windows yang berguna dalam forensik?
+AegisX: Artefak Windows yang sering dipakai: Prefetch (aplikasi yang pernah dijalankan), Registry (RecentDocs, UserAssist, Run keys), shortcut (.lnk) yang mencatat file yang diakses, recycle bin, file $MFT (Master File Table) yang mencatat semua file, event logs, Windows Search (Windows.edb), dan thumbnail cache. Setiap artefak punya nilai berbeda; Prefetch dan $MFT misalnya menunjukkan aktivitas eksekusi dan file yang pernah ada meski sudah dihapus.
+
+User: Apa itu email forensics dan apa yang dicari?
+AegisX: Email forensics menganalisis email untuk membuktikan atau menyangkal aktivitas tertentu: phishing, eksfiltrasi data, atau komunikasi terlarang. Yang diperiksa: header lengkap (termasuk header internal yang menunjukkan server asal), metadata (waktu, IP, user agent), lampiran berbahaya, dan isi. Header bisa dipalsukan, jadi analisis membandingkan beberapa header (Received) untuk melacak jalur sebenarnya. Arsip seperti .pst/.ost juga diekstrak dan diindeks.
+
+User: Bagaimana cara menangani bukti dari ponsel?
+AegisX: Forensik ponsel dimulai dengan mengisolasi perangkat dari jaringan (mode pesawat atau Faraday bag) agar tidak bisa dihapus dari jarak jauh. Lalu buat gambar logis atau fisik dengan alat seperti Cellebrite atau Magnet AXIOM. Yang diekstrak: kontak, pesan, riwayat panggilan, aplikasi chat, lokasi, dan file media. Banyak aplikasi menyimpan data di area terenkripsi atau terisolasi; kunci dari layar kunci atau akun cloud kadang diperlukan dan biasanya diatur hukum.
+
+User: Apa itu anti-forensik dan bagaimana menghadapinya?
+AegisX: Anti-forensik adalah upaya menyulitkan analisis: penghapusan aman (wipe), enkripsi, steganografi, timestomping (memalsukan timestamp), file yang dipecah, dan log yang dihapus. Menghadapinya: andalkan artefak yang sulit diubah (seperti data journaling file system, log server, cadangan cloud), bandingkan beberapa sumber waktu, dan analisis memori yang menangkap aktivitas sebelum penghapusan. Ingat, hampir tidak mungkin menghapus semua jejak; tujuan penyerang hanya memperlambat analisis.

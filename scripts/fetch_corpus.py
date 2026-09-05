@@ -259,6 +259,7 @@ def fetch_all_owasp_cheatsheets(out_dir: Path, force: bool = False) -> int:
 
 ID_WIKI_API = "https://id.wikipedia.org/w/api.php"
 # Kategori Wikipedia Bahasa Indonesia yang relevan untuk keamanan siber.
+# Kategori yang tidak ada cukup mengembalikan kosong (aman untuk digabung).
 ID_WIKI_CATEGORIES = [
     "Kategori:Keamanan_komputer",
     "Kategori:Keamanan_informasi",
@@ -268,6 +269,13 @@ ID_WIKI_CATEGORIES = [
     "Kategori:Virus_komputer",
     "Kategori:Serangan_siber",
     "Kategori:Perangkat_lunak_keamanan",
+    # v2: perluasan aset data (forensik, kejahatan maya, jaringan, privasi)
+    "Kategori:Kejahatan_dunia_maya",
+    "Kategori:Forensik_digital",
+    "Kategori:Pencurian_identitas",
+    "Kategori:Jaringan_komputer",
+    "Kategori:Privasi",
+    "Kategori:Sistem_operasi",
 ]
 
 

@@ -18,10 +18,18 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Callable
 
 from aegisx.agent import AegisAgent
 from aegisx.chat import DEFAULT_PROMPT, generate
 from aegisx.gate import AuthorizationGate
+
+# Harness note fed back after every tool result (ReAct reflection step).
+_REFLECT_NOTE = (
+    "[system] Evaluasi hasil tool di atas. Kalau sudah cukup untuk menjawab "
+    "pengguna, jawab sekarang tanpa memanggil tool lagi. Kalau perlu data "
+    "tambahan, panggil satu @tool lagi yang paling relevan."
+)
 
 _TOOL_LINE = re.compile(r"^@tool\s+(\w+)\s+(\S+)\s*$", re.IGNORECASE)
 
@@ -64,10 +72,17 @@ def run_turn(
     agent: AegisAgent,
     user_input: str,
     history: str = "",
-    max_tool_rounds: int = 3,
+    max_tool_rounds: int = 5,
+    confirm_fn: Callable[[str, str], bool] | None = None,
     **gen_kwargs,
 ) -> str:
-    """One user turn with up to max_tool_rounds tool executions."""
+    """One ReAct turn: plan -> act (gated tool) -> reflect, up to N rounds.
+
+    confirm_fn (optional human-in-the-loop gate): called as
+    confirm_fn(tool_name, target) before every execution; returning False
+    skips the tool. The harness appends a reflection note after each tool
+    result so the model decides: answer now, or call another tool.
+    """
     conversation = history
     for _ in range(max_tool_rounds):
         prompt = DEFAULT_PROMPT + user_input + "\n\n" + conversation + "AegisX: "
@@ -79,17 +94,62 @@ def run_turn(
             return conversation
 
         tool_name, target = call
+        if confirm_fn is not None and not confirm_fn(tool_name, target):
+            conversation += f"AegisX: {raw}\n(agent note: user declined to run {tool_name} on {target}; answer from what you already know.)\n"
+            return conversation
+
         ok, result = execute_tool(agent, tool_name, target)
         if not ok:
             conversation += f"AegisX: {raw}\n(agent note: {result})\n"
             return conversation
-        # Feed tool output back so the model can summarize it.
-        user_input = user_input
+        # Feed tool output + reflection note back so the loop can continue.
         conversation += (
             f"AegisX: {raw}\n"
             f"[tool {tool_name} output]\n{result[:2000]}\n[/tool]\n"
+            f"{_REFLECT_NOTE}\n"
         )
     return conversation + "\n(stopped: tool round limit reached)\n"
+
+
+# --------------------------------------------------------------------- #
+# Session persistence: survive disconnects, same philosophy as training. #
+# --------------------------------------------------------------------- #
+def save_session(path: str, history: str) -> None:
+    """Append the current conversation state to a SQLite session file."""
+    import sqlite3
+    import time
+
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(p))
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS turns ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, history TEXT NOT NULL)"
+        )
+        con.execute("INSERT INTO turns (ts, history) VALUES (?, ?)", (time.time(), history))
+        con.commit()
+    finally:
+        con.close()
+
+
+def load_session(path: str) -> str:
+    """Return the newest saved conversation state, or '' when none exists."""
+    import sqlite3
+
+    p = Path(path)
+    if not p.exists():
+        return ""
+    con = sqlite3.connect(str(p))
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS turns ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, history TEXT NOT NULL)"
+        )
+        row = con.execute("SELECT history FROM turns ORDER BY id DESC LIMIT 1").fetchone()
+        return row[0] if row else ""
+    finally:
+        con.close()
 
 
 def main() -> None:
@@ -102,6 +162,10 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--device", type=str, default="")
+    parser.add_argument("--max-tool-rounds", type=int, default=5, help="max tool rounds per user turn (ReAct loop cap)")
+    parser.add_argument("--confirm", action="store_true", help="ask y/N before every tool execution (human-in-the-loop)")
+    parser.add_argument("--session", default="logs/agent_session.db", help="SQLite session state file")
+    parser.add_argument("--resume", action="store_true", help="continue from the last saved session")
     args = parser.parse_args()
 
     gate = AuthorizationGate(args.allowlist, args.audit_log)
@@ -114,8 +178,15 @@ def main() -> None:
         device=args.device or ("cuda" if __import__("torch").cuda.is_available() else "cpu"),
     )
 
-    print("AegisX agent mode — @tool recon_ports <target> to run gated recon. Ctrl+C / 'exit' to quit.")
-    history = ""
+    confirm_fn: Callable[[str, str], bool] | None = None
+    if args.confirm:
+        def confirm_fn(tool_name: str, target: str) -> bool:  # noqa: E306
+            return input(f"  [confirm] run {tool_name} on {target}? [y/N] ").strip().lower().startswith("y")
+
+    print("AegisX agent mode (ReAct, max %d rounds) — @tool <name> <target>. Ctrl+C / 'exit' to quit." % args.max_tool_rounds)
+    history = load_session(args.session) if args.resume else ""
+    if history:
+        print(f"(session resumed from {args.session})")
     while True:
         try:
             user = input("\nYou> ").strip()
@@ -126,7 +197,17 @@ def main() -> None:
             continue
         if user.lower() in {"exit", "quit"}:
             break
-        history = run_turn(args.model, args.tokenizer, agent, user, history=history, **kwargs)
+        history = run_turn(
+            args.model,
+            args.tokenizer,
+            agent,
+            user,
+            history=history,
+            max_tool_rounds=args.max_tool_rounds,
+            confirm_fn=confirm_fn,
+            **kwargs,
+        )
+        save_session(args.session, history)
         # Print just the last assistant message.
         last = history.strip().split("\nAegisX: ")[-1]
         print(f"\nAegisX> {last}")

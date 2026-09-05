@@ -5,14 +5,20 @@ Supported layouts:
      knowledge/ at repo root) -> no env vars needed, simplest possible setup.
   2. Model on the Hub: set AEGISX_REPO env var to your model repo id.
 
-RAG grounding:
-  If a `knowledge/` folder of .txt files sits next to the app (layout 1) or
-  inside the downloaded model repo (layout 2), each question first retrieves
-  the top relevant passages (aegisx.rag.CorpusIndex), the model answers with
-  that context, and the source file names are shown under the reply.
+Performance:
+  - CPU Spaces: the model is dynamically quantized to int8 at load time
+    (2-3x faster inference, ~4x smaller memory footprint).
+  - ZeroGPU: fp32 weights move to the allocated GPU (quantization skipped).
 
-The app is decorated with @spaces.GPU so it runs on the free ZeroGPU tier.
-Model inference falls back to CPU when no GPU is allocated.
+RAG grounding (v2):
+  If a `knowledge/` folder of .txt files sits next to the app, each question
+  first retrieves the top relevant passages (aegisx.rag.CorpusIndex with BM25
+  + section-aware chunking), the model answers with that context, and the
+  source file names are shown under the reply.
+
+Streaming:
+  On CPU the reply streams token-by-token; on ZeroGPU it arrives in one
+  piece (the @spaces.GPU decorator runs the generation in a single call).
 """
 
 from __future__ import annotations
@@ -71,6 +77,23 @@ _index = None
 _knowledge_files: list[str] = []
 
 
+def _quantize_int8(model):
+    """Dynamic int8 quantization for the CPU path (Linear layers only)."""
+    import torch
+    from torch import nn
+    from torch.ao.quantization import quantize_dynamic
+
+    if torch.cuda.is_available():
+        return model  # GPU path keeps fp32 weights
+    try:
+        quantized = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
+        print("Model quantized to int8 (CPU fast path).")
+        return quantized
+    except Exception as exc:  # quantization is best-effort, never fatal
+        print(f"int8 quantization skipped: {exc}")
+        return model
+
+
 def _load_model():
     global _model
     if _model is None:
@@ -79,6 +102,7 @@ def _load_model():
 
         model = GPT.load(MODEL_PATH, device="cpu")
         model.eval()
+        model = _quantize_int8(model)
         tokenizer = ByteLevelBPETokenizer.load(TOKENIZER_PATH)
         _model = (model, tokenizer)
         print("Model loaded.")
@@ -92,9 +116,7 @@ def _load_knowledge() -> tuple[CorpusIndex, list[str]]:
         index = CorpusIndex()
         index.add_dir(KNOWLEDGE_DIR)
         _index = index
-        _knowledge_files = sorted(
-            {c.source for c in index.chunks}
-        )
+        _knowledge_files = sorted({c.source for c in index.chunks})
         print(f"Knowledge base: {len(index)} chunks from {len(_knowledge_files)} files.")
     return _index, _knowledge_files
 
@@ -110,6 +132,38 @@ def _retrieve_context(query: str, top_k: int = 3) -> tuple[str, list[str]]:
     sources = sorted({c.source for c in results})
     ctx = index.format_context(results, max_chars_per=700)
     return ctx, sources
+
+
+def _generate_stream(prompt: str, temperature: float, max_tokens: int):
+    """Yield progressively longer replies, token by token (CPU path)."""
+    import torch
+
+    model, tokenizer = _load_model()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        model = model.to(device)
+    ids = tokenizer.encode(prompt, add_special_tokens=True)
+    idx = torch.tensor([ids], dtype=torch.long, device=device)
+    prev = idx
+    new_token_ids: list[int] = []
+    with torch.no_grad():
+        for _ in range(int(max_tokens)):
+            idx_cond = idx[:, -model.config.block_size:]
+            logits, _ = model(idx_cond)
+            logits = logits[:, -1, :] / max(float(temperature), 1e-6)
+            for tok in torch.unique(prev[0]):
+                val = logits[0, tok]
+                logits[0, tok] = val / 1.1 if val > 0 else val * 1.1
+            top_vals, top_idx = torch.topk(logits, 50)
+            probs = torch.softmax(top_vals, dim=-1)
+            nxt = top_idx[0, torch.multinomial(probs, num_samples=1)]
+            prev = torch.cat([prev, nxt.view(1, 1)], dim=1)
+            idx = prev
+            new_token_ids.append(nxt.item())
+            text = tokenizer.decode(new_token_ids)
+            if "<|endoftext|>" in text:
+                break
+            yield text.strip()
 
 
 def _generate_text(prompt: str, temperature: float, max_tokens: int) -> str:
@@ -132,8 +186,8 @@ def _generate_text(prompt: str, temperature: float, max_tokens: int) -> str:
     return tokenizer.decode(out[0].tolist()[len(ids):]).strip()
 
 
-def respond(message: str, history: list, temperature: float, max_tokens: int) -> tuple[str, list[str]]:
-    # RAG: pull relevant passages + sources before building the prompt.
+def build_prompt(message: str) -> tuple[str, list[str]]:
+    """RAG grounding: pull relevant passages + sources, build the full prompt."""
     context, sources = _retrieve_context(message)
     if context:
         prompt = (
@@ -145,12 +199,26 @@ def respond(message: str, history: list, temperature: float, max_tokens: int) ->
         )
     else:
         prompt = SYSTEM_PROMPT + "User: " + message + "\n\nAegisX: "
+    return prompt, sources
 
+
+def respond(message: str, history: list, temperature: float, max_tokens: int) -> tuple[str, list[str]]:
+    """One-shot (non-streaming) reply — kept for API compatibility."""
+    prompt, sources = build_prompt(message)
     if spaces is not None:
         reply = _respond_gpu(prompt, temperature, max_tokens)
     else:
         reply = _generate_text(prompt, temperature, max_tokens)
     return reply, sources
+
+
+def stream_reply(message: str, temperature: float, max_tokens: int):
+    """Yield partial replies; one-shot on ZeroGPU, token-by-token on CPU."""
+    prompt, _ = build_prompt(message)
+    if spaces is not None:
+        yield _respond_gpu(prompt, temperature, max_tokens)
+    else:
+        yield from _generate_stream(prompt, temperature, max_tokens)
 
 
 if spaces is not None:
@@ -168,7 +236,7 @@ with gr.Blocks(title="AegisX-Mini") as demo:
     gr.Markdown(
         "# ⚡ AegisX-Mini\nA lightweight cybersecurity model trained from scratch. "
         "\n\n_Answers are grounded in a local knowledge base when available — "
-        "sources appear under each reply._"
+        "sources appear under each reply. CPU mode streams token-by-token._"
     )
     chatbot = gr.Chatbot(height=500)
     msg = gr.Textbox(placeholder="Ask about recon, scanning, defense, bug bounty...")
@@ -204,11 +272,17 @@ with gr.Blocks(title="AegisX-Mini") as demo:
         ]
 
     def chat_fn(message, history, temperature, max_tokens):
-        reply, sources = respond(message, history, temperature, max_tokens)
+        """Streaming chat handler: yields partials, final yield carries sources."""
+        _, sources = build_prompt(message)
+        conv = _to_tuples(history) + [("user", message)]
+        partial = ""
+        for piece in stream_reply(message, temperature, max_tokens):
+            partial = piece
+            yield "", _to_messages(conv + [("assistant", partial)])
+        final = partial.strip()
         if sources:
-            reply = reply + "\n\n📚 Sumber: " + ", ".join(sources)
-        conv = _to_tuples(history) + [("user", message), ("assistant", reply)]
-        return "", _to_messages(conv)
+            final = final + "\n\n📚 Sumber: " + ", ".join(sources)
+        yield "", _to_messages(conv + [("assistant", final)])
 
     msg.submit(chat_fn, [msg, chatbot, temperature, max_tokens], [msg, chatbot])
     clear.click(lambda: [], None, chatbot)
