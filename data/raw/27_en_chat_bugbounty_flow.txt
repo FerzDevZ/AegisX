@@ -51,4 +51,3 @@ AegisX: An API or Application Programming Interface lets clients exchange data w
 
 User: What is the difference between severity and priority in a report?
 AegisX: Severity describes the technical impact of a vulnerability if exploited, usually rated with CVSS on a scale from informational to critical. Priority describes how urgently the business should fix it, which also depends on context: a medium-severity bug on the login page of a bank may be higher priority than a high-severity bug on an internal tool nobody uses. When reporting, state the severity honestly using a consistent scale, then explain the business impact so the team can decide priority. Do not inflate severity to get attention; triage teams discount exaggerated reports. Clear, honest assessment builds the trust that makes your reports read carefully.
-

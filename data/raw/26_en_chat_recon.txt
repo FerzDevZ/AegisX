@@ -54,4 +54,3 @@ AegisX: The Wayback Machine archives snapshots of websites over time. In reconna
 
 User: How do I use httpx for probing hosts?
 AegisX: Httpx probes a list of hosts and reports which ones respond and what they run. Give it a list of subdomains or IPs: cat hosts.txt | httpx. It follows redirects by default and reports the final URL, status code, title, and detected technologies. Use flags like -mc 200 to filter by status, -title to show page titles, -tech-detect to identify frameworks, and -web-server to show the server software. It is the standard step between DNS resolution and deeper testing: after enumerating hundreds of subdomains, httpx reduces them to the handful running web applications worth investigating.
-

@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import random
@@ -105,7 +106,8 @@ def estimate_loss(
         for _ in range(eval_iters):
             x, y = get_batch(data, block_size, batch_size, device)
             with torch.no_grad():
-                _, loss = model(x, y)
+                with torch.autocast(device_type="cuda", enabled=device.startswith("cuda")):
+                    _, loss = model(x, y)
             losses.append(loss.item())
         out[split_name] = float(sum(losses) / len(losses))
     model.train()
@@ -136,6 +138,8 @@ def main() -> None:
     parser.add_argument("--early-stop-min-delta", type=float, default=1e-4, help="min val-loss improvement to count as progress")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="")
+    parser.add_argument("--no-amp", action="store_true", help="disable mixed precision on CUDA (default: auto-on)")
+    parser.add_argument("--history", type=str, default="", help="optional CSV path to log every eval (default: <out>/history.csv)")
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -236,6 +240,13 @@ def main() -> None:
         return sft_lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
     print("[4/4] Training")
+    use_amp = device == "cuda" and not args.no_amp
+    if use_amp:
+        print("      ⚡ mixed precision (AMP) enabled - expected 1.5-2x speedup on T4")
+    try:
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    except AttributeError:  # older torch (<2.3)
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     model.train()
     step = 0
     start = time.time()
@@ -250,13 +261,16 @@ def main() -> None:
         loss_accum = 0.0
         for _ in range(grad_accum):
             x, y = get_batch(train_data, cfg.block_size, args.batch_size, device)
-            _, loss = model(x, y)
-            loss.backward()
+            with torch.autocast(device_type="cuda", enabled=use_amp):
+                _, loss = model(x, y)
+            scaler.scale(loss).backward()
             loss_accum += loss.item()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         for g in optimizer.param_groups:
             g["lr"] = lr_at(step)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         step += 1
 
         if step % args.print_every == 0 or step == args.max_steps:
@@ -270,6 +284,14 @@ def main() -> None:
         if step % args.eval_every == 0 or step == args.max_steps:
             metrics = estimate_loss(model, train_data, val_data, cfg.block_size, args.batch_size, device, eval_iters=args.eval_iters)
             print(f"  eval | train loss {metrics['train']:.4f} | val loss {metrics['val']:.4f}")
+
+            # Append to history CSV so runs are comparable over time.
+            history_path = Path(args.history) if args.history else (out_dir / "history.csv")
+            if step == args.eval_every or (not history_path.exists()):
+                with history_path.open("w", newline="", encoding="utf-8") as fh:
+                    csv.writer(fh).writerow(["step", "train_loss", "val_loss", "lr"])
+            with history_path.open("a", newline="", encoding="utf-8") as fh:
+                csv.writer(fh).writerow([step, f"{metrics['train']:.4f}", f"{metrics['val']:.4f}", f"{lr_at(step):.2e}"])
 
             # Crash-safe periodic checkpoint (overwrites each eval).
             model.save(str(latest_path))
@@ -299,6 +321,8 @@ def main() -> None:
     else:
         print(f"Done. Model saved to {model_path}")
     print(f"Next: python -m aegisx.chat --model {model_path} --tokenizer {out_dir}/tokenizer.json")
+    history_path = Path(args.history) if args.history else (out_dir / "history.csv")
+    print(f"History: {history_path}")
 
 
 if __name__ == "__main__":

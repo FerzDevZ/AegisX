@@ -158,11 +158,33 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="")
     parser.add_argument("--max-questions", type=int, default=0, help="0 = run all")
     parser.add_argument("--max-new-tokens", type=int, default=90)
+    parser.add_argument("--history", type=str, default="", help="append summary row to a CSV (run comparisons over time)")
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     rows = run_eval(args.model, args.tokenizer, device=device, max_questions=args.max_questions)
-    print_report(rows)
+    report = print_report(rows)
+    if args.history:
+        import csv
+        import datetime
+        from pathlib import Path
+
+        path = Path(args.history)
+        header = ["timestamp", "model", "overall", "en", "id", "n_questions"]
+        new_file = not path.exists()
+        with path.open("a", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            if new_file:
+                w.writerow(header)
+            w.writerow([
+                datetime.datetime.now().isoformat(timespec="seconds"),
+                args.model,
+                f"{report['overall'] * 100:.1f}",
+                f"{report['en'] * 100:.1f}",
+                f"{report['id'] * 100:.1f}",
+                report["n_questions"],
+            ])
+        print(f"\nAppended to history: {path}")
 
 
 if __name__ == "__main__":

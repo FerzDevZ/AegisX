@@ -172,10 +172,84 @@ def flatten_json(raw: str) -> str:
     return "\n\n".join(lines)
 
 
+NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+
+
+def fetch_nvd_bulk(dest: Path, max_pages: int = 5, days: int = 120) -> bool:
+    """Pull recent CVE records from the NVD API (thousands of descriptions).
+
+    NVD is rate-limited without an API key (~5 req/30s), so we page slowly.
+    Each page returns up to 2000 CVEs; max_pages defaults to 5 = up to ~10k
+    CVEs. Restricts to the last `days` days (120 = NVD no-key maximum for a
+    date range) so the corpus holds modern, relevant CVEs instead of 1999-era
+    records. Writes plain text: id + description + severity.
+    """
+    import datetime
+    import json
+    import time
+    import urllib.parse
+
+    written = 0
+    start_index = 0
+    per_page = 2000
+    # Recent window: modern CVE descriptions are richer and more relevant.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start = now - datetime.timedelta(days=days)
+    date_q = (
+        f"&pubStartDate={urllib.parse.quote(start.strftime('%Y-%m-%dT%H:%M:%S.000') + 'Z')}"
+        f"&pubEndDate={urllib.parse.quote(now.strftime('%Y-%m-%dT%H:%M:%S.000') + 'Z')}"
+    )
+    time.sleep(1.0)
+    for page in range(max_pages):
+        url = f"{NVD_API}?resultsPerPage={per_page}&startIndex={start_index}{date_q}"
+        print(f"  ↓ NVD page {page + 1}/{max_pages} (startIndex={start_index})")
+        try:
+            with urllib.request.urlopen(url, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"    ✗ NVD page {page + 1} failed: {exc}")
+            break
+        vulns = data.get("vulnerabilities", [])
+        if not vulns:
+            break
+        lines: list[str] = []
+        for item in vulns:
+            cve = item.get("cve", {})
+            cve_id = cve.get("id", "")
+            desc = ""
+            for d in cve.get("descriptions", []):
+                if d.get("lang") == "en":
+                    desc = d.get("value", "").strip()
+                    break
+            severity = ""
+            for m in cve.get("metrics", {}).values():
+                if m:
+                    cvss = m[0].get("cvssData", {})
+                    severity = cvss.get("baseSeverity", "")
+                    break
+            if cve_id and desc:
+                sev = f" Severity: {severity}." if severity else ""
+                lines.append(f"CVE: {cve_id}.{sev} {desc}")
+        if not lines:
+            break
+        with dest.open("a", encoding="utf-8") as fh:
+            fh.write("\n\n".join(lines) + "\n")
+        written += len(lines)
+        total_results = data.get("totalResults", 0)
+        start_index += per_page
+        if start_index >= total_results:
+            break
+        time.sleep(7.0)  # respect NVD rate limit without an API key
+    print(f"    ✓ NVD bulk: {written:,} CVE descriptions -> {dest.name}")
+    return written > 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch public cysec corpora")
     parser.add_argument("--target-dir", default="data/raw")
     parser.add_argument("--force", action="store_true", help="re-download existing files")
+    parser.add_argument("--cve-pages", type=int, default=5, help="NVD API pages to fetch (0 = skip NVD bulk)")
+    parser.add_argument("--cve-keywords", default="", help="optional NVD keyword filter, e.g. 'sql injection'")
     args = parser.parse_args()
 
     out_dir = Path(args.target_dir)
@@ -183,6 +257,17 @@ def main() -> None:
 
     ok = 0
     fetched: dict[str, str] = dict(SOURCES)
+
+    # Bulk NVD fetch (thousands of CVEs) into one growing file.
+    if args.cve_pages > 0:
+        nvd_dest = out_dir / "cve_nvd_bulk.txt"
+        if nvd_dest.exists() and not args.force:
+            print(f"  = cve_nvd_bulk.txt exists ({nvd_dest.stat().st_size / 1024:.0f} KB), skipping (--force to re-download)")
+        else:
+            if nvd_dest.exists():
+                nvd_dest.unlink()
+            if fetch_nvd_bulk(nvd_dest, max_pages=args.cve_pages):
+                ok += 1
 
     # Add individual CVE records (JSON -> flatten to text).
     for cve_id in CVE_SAMPLE_IDS:
@@ -202,7 +287,7 @@ def main() -> None:
                 ok += 1
 
     total = sum(p.stat().st_size for p in out_dir.glob("*.txt"))
-    print(f"\nDone: {ok}/{len(SOURCES)} sources. Corpus now ~{total / 1024:.0f} KB.")
+    print(f"\nDone: {ok}/{len(SOURCES) + (1 if args.cve_pages > 0 else 0)} sources. Corpus now ~{total / 1024:.0f} KB.")
     if total < 200 * 1024:
         print("Tip: add your own .txt files too — more relevant text = better model.")
 

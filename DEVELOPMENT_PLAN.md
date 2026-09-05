@@ -13,9 +13,12 @@
 | Area | State |
 |---|---|
 | Pipeline | ✅ Train → chat → export works end-to-end (verified on CPU + Colab) |
-| Tests | ✅ 64/64 passing (tokenizer, model, training, gate, RAG, agent CLI, eval) |
-| Corpus | ✅ **2.3 MB / 54 files / ~2.6k chunks** — OWASP (30 sheets + ASVS), MITRE ATT&CK, CVE records, custom EN+ID |
+| Tests | ✅ 77/77 passing (tokenizer, model, training, gate, RAG, agent CLI, eval, clean) |
+| Corpus | ✅ **2.5 MB / 66 files** — OWASP (30 sheets + ASVS), MITRE ATT&CK, CVE (NVD bulk via §2b), custom EN+ID (incl. API/mobile, cloud/AD) |
 | Early stopping | ✅ stops at val-loss plateau, restores best weights |
+| AMP (T4) | ✅ mixed precision on CUDA (`--no-amp` to disable), ~1.5-2x faster |
+| History CSV | ✅ `history.csv` logs every eval; `aegisx.eval --history` appends scores per run |
+| Corpus cleaner | ✅ `scripts/clean_corpus.py` dedup + strip noise (`--apply`, .bak backup) |
 | Periodic checkpoint | ✅ `model_latest.pt` every eval (crash-safe long Colab runs) |
 | RAG | ✅ zero-dep `aegisx/rag.py`: chunk + retrieve with source (df-cache for fast builds) |
 | Eval | ✅ `aegisx/eval.py`: 20 fixed Q (10 EN + 10 ID), keyword-coverage scoring |
