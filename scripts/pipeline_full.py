@@ -54,8 +54,27 @@ def read_config(pt_path: Path) -> dict | None:
         return None
 
 
-def archive_if_mismatch(out_dir: Path, want: tuple[int, int]) -> None:
-    """Move a checkpoint dir aside when its arch differs from the target."""
+def _struct_key(cfg: dict) -> tuple:
+    """Structural arch key (block/layer/head/embd), stable across tokenizers."""
+    return (
+        cfg.get("block_size"),
+        cfg.get("n_layer"),
+        cfg.get("n_head"),
+        cfg.get("n_embd"),
+    )
+
+
+def _vocab_block_key(cfg: dict) -> tuple:
+    return (cfg.get("vocab_size"), cfg.get("block_size"))
+
+
+def archive_if_mismatch(out_dir: Path, want: tuple, structural: bool) -> None:
+    """Move a checkpoint dir aside when its arch differs from the target.
+
+    `structural=True` compares block/layer/head/embd only — used by stage 1
+    because the real tokenizer vocab (byte base + merges) is always <= the
+    requested --vocab-size, so comparing raw vocab would misfire every run.
+    """
     if not out_dir.exists():
         return
     ckpt = out_dir / "model.pt"
@@ -66,26 +85,33 @@ def archive_if_mismatch(out_dir: Path, want: tuple[int, int]) -> None:
     cfg = read_config(ckpt)
     if cfg is None:
         return
-    have = (cfg.get("vocab_size"), cfg.get("block_size"))
-    if have == want:
+    key = _struct_key(cfg) if structural else _vocab_block_key(cfg)
+    if key == want:
         return
-    arc = out_dir.parent / f"{out_dir.name}-archive-vocab{have[0]}-block{have[1]}"
+    if structural:
+        label = "-block{}".format(cfg.get("block_size"))
+    else:
+        label = "-vocab{}-block{}".format(cfg.get("vocab_size"), cfg.get("block_size"))
+    arc = out_dir.parent / f"{out_dir.name}-archive{label}"
     if not arc.exists():
         out_dir.rename(arc)
-        print(f"  ♻️  arsitektur lama {have} != target {want}; checkpoint diarsipkan ke {arc.name}")
+        print(f"  ♻️  arsitektur lama {key} != target {want}; checkpoint diarsipkan ke {arc.name}")
     else:
-        print(f"  ♻️  arsitektur lama {have} != target {want}; archive {arc.name} sudah ada, checkpoint dibiarkan")
+        print(f"  ♻️  arsitektur lama {key} != target {want}; archive {arc.name} sudah ada, checkpoint dibiarkan")
 
 
 def stage_1(args) -> bool:
     out = Path(args.base_dir) / STAGE_DIRS[1]
-    want = (args.vocab_size, args.block_size)
-    archive_if_mismatch(out, want)
+    # Bandingkan hanya arsitektur struktural; vocab aktual ditentukan tokenizer
+    # (selalu <= --vocab-size karena byte-fallback BPE), jadi vocab tidak dipakai
+    # sebagai penentu arsip di tahap 1.
+    want = (args.block_size, args.n_layer, args.n_head, args.n_embd)
+    archive_if_mismatch(out, want, structural=True)
 
     finished = out / "model.pt"
     if finished.exists() and not args.force:
         cfg = read_config(finished)
-        if cfg and (cfg.get("vocab_size"), cfg.get("block_size")) == want:
+        if cfg and _struct_key(cfg) == want:
             print(f"  ✓ tahap 1 sudah selesai ({finished}); skip (--force untuk ulang)")
             return True
 
@@ -93,7 +119,7 @@ def stage_1(args) -> bool:
     latest = out / "model_latest.pt"
     if latest.exists() and not args.force:
         cfg = read_config(latest)
-        if cfg and (cfg.get("vocab_size"), cfg.get("block_size")) == want:
+        if cfg and _struct_key(cfg) == want:
             resume = str(latest)
             print(f"  ⏳ resume tahap 1 dari {latest.name}")
 
@@ -130,8 +156,8 @@ def stage_2(args) -> bool:
         return False
 
     want_cfg = read_config(init)
-    want = (want_cfg["vocab_size"], want_cfg["block_size"]) if want_cfg else (0, 0)
-    archive_if_mismatch(out, want)
+    want = _vocab_block_key(want_cfg) if want_cfg else (0, 0)
+    archive_if_mismatch(out, want, structural=False)
 
     finished = out / "model.pt"
     if finished.exists() and not args.force:
@@ -142,7 +168,7 @@ def stage_2(args) -> bool:
     latest = out / "model_latest.pt"
     if latest.exists() and not args.force:
         cfg = read_config(latest)
-        if cfg and (cfg.get("vocab_size"), cfg.get("block_size")) == want:
+        if cfg and _vocab_block_key(cfg) == want:
             resume = str(latest)
             print(f"  ⏳ resume tahap 2 dari {latest.name}")
 
@@ -182,8 +208,8 @@ def stage_3(args) -> bool:
         return False
 
     want_cfg = read_config(init)
-    want = (want_cfg["vocab_size"], want_cfg["block_size"]) if want_cfg else (0, 0)
-    archive_if_mismatch(out, want)
+    want = _vocab_block_key(want_cfg) if want_cfg else (0, 0)
+    archive_if_mismatch(out, want, structural=False)
 
     pairs = REPO_ROOT / "data" / "finetune" / "preferences.jsonl"
     if not pairs.exists():
@@ -199,7 +225,7 @@ def stage_3(args) -> bool:
     latest = out / "model_latest.pt"
     if latest.exists() and not args.force:
         cfg = read_config(latest)
-        if cfg and (cfg.get("vocab_size"), cfg.get("block_size")) == want:
+        if cfg and _vocab_block_key(cfg) == want:
             resume = str(latest)
             print(f"  ⏳ resume tahap 3 dari {latest.name}")
 
