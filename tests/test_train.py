@@ -135,6 +135,50 @@ def test_end_to_end_tiny_train_saves_model(tmp_path):
     assert (out / "config.json").exists()
 
 
+def test_save_every_writes_periodic_checkpoint_before_eval(tmp_path):
+    """--save-every persists model_latest.pt mid-run, before any eval fires.
+
+    This is the crash-safety mechanism: if the Colab session dies, the
+    periodic checkpoint already exists so the next run resumes from it.
+    """
+    import subprocess
+    import sys
+    import time
+
+    data_dir = _write_small_corpus(tmp_path / "data")
+    out = tmp_path / "out"
+    # eval-every huge => no eval would ever fire; only --save-every writes.
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "aegisx.train",
+            "--data", str(data_dir), "--out", str(out),
+            "--vocab-size", "512", "--block-size", "32",
+            "--n-layer", "1", "--n-head", "1", "--n-embd", "32",
+            "--batch-size", "2", "--grad-accum", "1",
+            "--max-steps", "100000", "--eval-every", "100000", "--eval-iters", "2",
+            "--save-every", "5", "--print-every", "100000", "--warmup-steps", "3",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    latest = out / "model_latest.pt"
+    try:
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if latest.exists() and latest.stat().st_size > 0:
+                break
+            time.sleep(0.5)
+        assert latest.exists(), "model_latest.pt was never written (--save-every broken?)"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
 def test_train_resume_with_existing_tokenizer(tmp_path):
     """Q2: --tokenizer resume path reuses a saved tokenizer."""
     import subprocess

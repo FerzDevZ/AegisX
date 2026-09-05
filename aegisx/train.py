@@ -132,6 +132,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--save-every", type=int, default=100, help="write model_latest.pt every N steps so a dropped session resumes with little loss")
     parser.add_argument("--eval-iters", type=int, default=20)
     parser.add_argument("--print-every", type=int, default=10, help="log every N steps")
     parser.add_argument("--early-stop-patience", type=int, default=5, help="stop after N evals without val improvement (0 = disable)")
@@ -281,6 +282,11 @@ def main() -> None:
                 f"| lr {lr_at(step):.2e} | {tokens_seen / elapsed / 1000:.1f}k tok/s"
             )
 
+        # Crash-safe periodic checkpoint: independent of eval cadence so a
+        # dropped session resumes from at most --save-every steps ago.
+        if step % args.save_every == 0 or step == args.max_steps:
+            model.save(str(latest_path))
+
         if step % args.eval_every == 0 or step == args.max_steps:
             metrics = estimate_loss(model, train_data, val_data, cfg.block_size, args.batch_size, device, eval_iters=args.eval_iters)
             print(f"  eval | train loss {metrics['train']:.4f} | val loss {metrics['val']:.4f}")
@@ -292,9 +298,6 @@ def main() -> None:
                     csv.writer(fh).writerow(["step", "train_loss", "val_loss", "lr"])
             with history_path.open("a", newline="", encoding="utf-8") as fh:
                 csv.writer(fh).writerow([step, f"{metrics['train']:.4f}", f"{metrics['val']:.4f}", f"{lr_at(step):.2e}"])
-
-            # Crash-safe periodic checkpoint (overwrites each eval).
-            model.save(str(latest_path))
 
             # Early stopping: keep the best weights, stop when val plateaus.
             if args.early_stop_patience > 0:
